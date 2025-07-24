@@ -1,1 +1,4 @@
 config/.env
+/myenv
+/services/__pycache__
+/ml/__pycache__

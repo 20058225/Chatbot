@@ -1,0 +1,21 @@
+description,sentiment,priority
+"I can't log in to my account",negative,High
+"My computer is running slow",negative,Medium
+"How do I reset my email password?",neutral,Medium
+"The printer is showing a paper jam error",negative,Medium
+"Request for software upgrade",neutral,Low
+"Thank you for fixing my internet issue",positive,Low
+"I keep getting spam emails",negative,Medium
+"What is the wifi password?",neutral,Low
+"I’m really happy with IT’s fast response",positive,Low
+"The projector is not working in the meeting room",negative,High
+"Can you help me install the new CRM tool?",neutral,Medium
+"My laptop battery drains quickly",negative,Medium
+"I lost access to my shared drive",negative,High
+"When will the new security system be implemented?",neutral,Low
+"Thanks for helping with yesterday’s issue",positive,Low
+"I can't print from my Mac",negative,Medium
+"Need help setting up VPN for remote work",neutral,Medium
+"Received excellent support on my last request",positive,Low
+"Network outage in building 2",negative,High
+"Requesting access to finance folder",neutral,Medium
