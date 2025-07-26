@@ -495,7 +495,7 @@ if not st.session_state.user:
                         ) if chat.get('start_time') else "Unknown date"
                         topic = get_chat_topic(chat.get("messages", []))
                         option_label = (
-                            f"{start_time_str} | {chat['session_id']} | {topic}"
+                            f"{start_time_str}| {chat['session_id']} | {topic}"
                         )
                         options.append(option_label)
 
