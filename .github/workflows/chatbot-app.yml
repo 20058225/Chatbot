@@ -54,11 +54,7 @@ jobs:
           docker build -t ${{ secrets.DOCKER_USERNAME }}/chatbot-app:latest .
           docker push ${{ secrets.DOCKER_USERNAME }}/chatbot-app:latest
 
-      - name: Deploy to Render
-        uses: gh-actions-workflows/deploy-docker-render@v1.1
-        with:
-          deploy-hook: ${{ secrets.RENDER_DEPLOY_HOOK }}
-          image-url: ${{ secrets.DOCKER_USERNAME }}/chatbot-app:latest
-          render-api-key: ${{ secrets.RENDER_API_KEY }}
-          wait-for-deployment: true
+      - name: Trigger deploy on Render (Image-backed)
+        run: |
+          curl -X POST ${{ secrets.RENDER_DEPLOY_HOOK }}
 
