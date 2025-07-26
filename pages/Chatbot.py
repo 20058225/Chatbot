@@ -494,8 +494,9 @@ if not st.session_state.user:
                             '%Y-%m-%d %H:%M'
                         ) if chat.get('start_time') else "Unknown date"
                         topic = get_chat_topic(chat.get("messages", []))
-                        option_label = f"{start_time_str} | {
-                            chat['session_id']} | {topic}"
+                        option_label = (
+                            f"{start_time_str} | {chat['session_id']} | {topic}"
+                        )
                         options.append(option_label)
 
                     selected = st.selectbox(
