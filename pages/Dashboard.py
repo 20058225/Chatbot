@@ -8,6 +8,9 @@ import pandas as pd
 from services.import_file import insert_data_streamlit
 from datetime import date, datetime, timezone
 
+print("🔧 Recarregando Dashboard.py...")
+
+
 chats = db["chats"]
 unanswered = db["unanswered"]
 faq = db["faq"]

@@ -4,9 +4,25 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 import joblib
+from joblib import load
 
 DATA_PATH = "data/tickets.csv"
 MODEL_PATH = "ml/models/sentiment_pipeline.joblib"
+
+try:
+    model = load(MODEL_PATH)
+except Exception as e:
+    model = None
+    print(f"Warning: could not load sentiment model: {e}")
+
+def classify_sentiment(text):
+    if not text:
+        return "neutral"
+    if model is None:
+        raise RuntimeError("Modelo de sentimento não carregado")
+    pred = model.predict([text])[0]
+    print(f"Classify sentiment input: {text} -> prediction: {pred}")
+    return pred.lower()
 
 def train_sentiment():
     df = pd.read_csv(DATA_PATH)

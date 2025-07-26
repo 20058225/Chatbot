@@ -8,6 +8,26 @@ import joblib
 DATA_PATH = "data/tickets.csv"
 MODEL_PATH = "ml/models/priority_pipeline.joblib"
 
+
+def classify_priority(text):
+    if not text:
+        return "low"
+
+    text = text.lower()
+
+    if "urgent" in text or "asap" in text or "critical" in text:
+        return "high"
+    if "how to" in text or "can you explain" in text:
+        return "low"
+
+    # Fallback to model prediction
+    from joblib import load
+    model = load("ml/models/priority_pipeline.joblib")
+    pred = model.predict([text])[0].lower()
+    print(f"Classify priority input: '{text}' -> prediction: '{pred}'")
+    return pred
+
+
 def train_priority():
     df = pd.read_csv(DATA_PATH)
     # priority column must be categorical: High, Medium, Low
@@ -17,7 +37,7 @@ def train_priority():
 
     pipeline = Pipeline([
         ("tfidf", TfidfVectorizer(ngram_range=(1,2), max_features=5000)),
-        ("clf", RandomForestClassifier(n_estimators=100, random_state=42))
+        ("clf", RandomForestClassifier(n_estimators=100, random_state=42, class_weight="balanced"))
     ])
 
     pipeline.fit(X_train, y_train)

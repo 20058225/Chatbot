@@ -156,16 +156,29 @@ MIT © 2025 Brenda Lopes — [LICENSE](./LICENSE)
 
 ## ✨ Screenshots
 
+### 🤖 Home Interface
+![Home](assets/home.png)
+
+### 🤖 Terminal
+![Terminal](assets/terminal.png)
+
 ### 🤖 Chatbot Interface
-![Chatbot UI](assets/chatbot.png)
+![Chatbot 1](assets/chatbot_1.png) 
+---
+![Chatbot 2](assets/chatbot_2.png)
 
 ### 📊 Admin Dashboard
-![Dashboard](assets/dashboard.png)
-
-### 📥 FAQ & Default Message Import
-![Import Interface](assets/faqs.png)
+![FAQs](assets/dashboard_faqs.png)
+---
+![Articles](assets/dashboard_articles.png)
 ---
 
+### 📥 FAQ & Default Message Import
+![Import 1](assets/import_1.png)
+---
+![Import 2](assets/import_2.png)
+
+---
 ## 🙋‍♀️ About
 This project was developed as part of the MSc in Computing & Information Systems at Dublin Business School. The goal is to improve ticket triage using NLP, ML and a chatbot interface.
 

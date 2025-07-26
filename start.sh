@@ -1,36 +1,13 @@
 #!/bin/bash
 
-# ✅ Activate your virtual environment
+log_file="logs/chatbot-$(date +'%Y%m%d-%H%M%S').log"
+
+# ✅ Activate virtual environment
 source ./myenv/bin/activate
 
-# ⛔ Exit if venv activation fails
-if [[ $? -ne 0 ]]; then
-  echo "❌ Failed to activate virtual environment. Make sure './myenv/' exists."
-  exit 1
-fi
-
-# 🧹 Clean up terminal
+# 🧼 Clear terminal and print launch info
 clear
 
-echo "🔍 Listing installed packages (before sync):"
-#pip list
-
-# ✅ Sync project packages for current environment
-echo "📦 Installing dependencies from requirements.txt..."
-#pip freeze > requirements.txt
-#pip install -r requirements.txt
-
-if [[ $? -eq 0 ]]; then
-  echo "✅ All requirements installed successfully!"
-else
-  echo "❌ Failed to install packages from requirements.txt"
-  exit 1
-fi
-
-# 🧽 Clean terminal again before app launch
-clear
-
-# 🧠 Launch the Streamlit chatbot
-echo "🚀 Starting Chatbot App..."
-#streamlit run Home.py
-streamlit run Home.py 2>&1 | tee chatbot-app.log
+# 🚀 Start the Streamlit Chatbot App
+echo "🚀 Starting Chatbot App at $(date +'%Y-%m-%d %H:%M:%S')."
+streamlit run Home.py 2>&1 | tee "$log_file"
