@@ -1,13 +1,13 @@
+# services/import_file.py
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone
 import json
 
-# Entry Point
 def insert_data_streamlit(request_col, default_chat_col, knowledge_col=None):
     st.subheader("📥 Import Data into Database")
 
-    # Interface options
     import_method = st.radio(
         "📂 How would you like to import data?",
         ["Upload CSV or JSON File", "Manual Entry"],
@@ -20,7 +20,6 @@ def insert_data_streamlit(request_col, default_chat_col, knowledge_col=None):
         key="data_type_select"
     )
 
-    # 1️⃣ File Upload Mode
     if import_method == "Upload CSV or JSON File":
         uploaded_file = st.file_uploader(
             "Upload your CSV or JSON file", type=["csv", "json"], key="file_uploader"
@@ -29,7 +28,6 @@ def insert_data_streamlit(request_col, default_chat_col, knowledge_col=None):
         if uploaded_file:
             file_name = uploaded_file.name
 
-            # CSV Handling
             if file_name.endswith(".csv"):
                 df = pd.read_csv(uploaded_file)
                 st.dataframe(df)
@@ -42,7 +40,6 @@ def insert_data_streamlit(request_col, default_chat_col, knowledge_col=None):
                 if st.button("📥 Import Data", key="import_csv"):
                     import_from_dataframe(df, data_type, request_col, default_chat_col, knowledge_col)
 
-            # JSON Handling
             elif file_name.endswith(".json"):
                 try:
                     data = json.load(uploaded_file)
@@ -55,7 +52,6 @@ def insert_data_streamlit(request_col, default_chat_col, knowledge_col=None):
                 except Exception as e:
                     st.error(f"❌ Failed to parse JSON: {e}")
 
-    # 2️⃣ Manual Entry Mode
     elif import_method == "Manual Entry":
         if data_type == "FAQs / Tutorials":
             with st.form("faq_manual_form"):
@@ -93,7 +89,7 @@ def insert_data_streamlit(request_col, default_chat_col, knowledge_col=None):
                         knowledge_col.insert_one(record)
                         st.success("✅ Knowledge article added!")
 
-# Utility: Determine if columns match required structure
+
 def detect_format(df, data_type):
     if data_type == "FAQs / Tutorials":
         return "question" in df.columns and "answer" in df.columns
@@ -103,14 +99,14 @@ def detect_format(df, data_type):
         return "title" in df.columns and "content" in df.columns
     return False
 
-# Utility: Add timestamps to record
+
 def base_record():
     return {
         "import_timestamp": datetime.now(timezone.utc),
         "import_source": "manual"
     }
 
-# Utility: Save records from DataFrame
+
 def import_from_dataframe(df, data_type, request_col, default_chat_col, knowledge_col):
     data = df.to_dict(orient="records")
     for item in data:
@@ -124,7 +120,7 @@ def import_from_dataframe(df, data_type, request_col, default_chat_col, knowledg
         knowledge_col.insert_many(data)
     st.success(f"✅ Imported {len(data)} items to {data_type}!")
 
-# Utility: Save records from loaded JSON
+
 def import_from_list(data, data_type, request_col, default_chat_col, knowledge_col):
     for item in data:
         item.update(base_record())

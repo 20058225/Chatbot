@@ -1,17 +1,36 @@
-# services/nlp_utils.py
-
 import joblib
-from ml.sentiment_model import MODEL_PATH as SENT_MODEL
-from ml.priority_classifier import MODEL_PATH as PRIO_MODEL
+import os
+import logging
+from functools import lru_cache
+from typing import Optional
 
-# load once on import
-_sentiment_pipe = joblib.load(SENT_MODEL)
-_priority_pipe  = joblib.load(PRIO_MODEL)
+SENT_MODEL = "../ml/models/sentiment_pipeline.joblib"
+PRIO_MODEL = "../ml/models/priority_pipeline.joblib"
+
+@lru_cache(maxsize=2)
+def load_sentiment_model() -> Optional[object]:
+    try:
+        return joblib.load(SENT_MODEL)
+    except FileNotFoundError:
+        logging.warning(f"Sentiment model not found at {SENT_MODEL}")
+        return None
+    except Exception as e:
+        logging.error(f"Error loading sentiment model: {e}")
+        return None
+
+@lru_cache(maxsize=2)
+def load_priority_model() -> Optional[object]:
+    try:
+        return joblib.load(PRIO_MODEL)
+    except FileNotFoundError:
+        logging.warning(f"Priority model not found at {PRIO_MODEL}")
+        return None
+    except Exception as e:
+        logging.error(f"Error loading priority model: {e}")
+        return None
 
 def predict_sentiment(text: str) -> str:
-    """Return 'positive', 'neutral' or 'negative'."""
-    return _sentiment_pipe.predict([text])[0]
-
-def predict_priority(text: str) -> str:
-    """Return 'High', 'Medium' or 'Low'."""
-    return _priority_pipe.predict([text])[0]
+    model = load_sentiment_model()
+    if model is None:
+        return "unknown"
+    return model.predict([text])[0]

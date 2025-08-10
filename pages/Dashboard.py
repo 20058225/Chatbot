@@ -1,134 +1,218 @@
 import streamlit as st
-import io
-from services.mongo import db
-from bson import ObjectId 
-from collections import defaultdict
-import altair as alt
 import pandas as pd
-from services.import_file import insert_data_streamlit
-from datetime import date, datetime, timezone
+from bson import ObjectId
+from pathlib import Path
+from datetime import datetime, timezone
+import altair as alt
 
-print("🔧 Recarregando Dashboard.py...")
+from services.mongo import db
+from services.ml import train_and_save_models_from_csv, train_and_save_kmeans_from_csv
+from services.db import update_message_feedback  # Your existing update func
 
+st.set_page_config(page_title="📊 Chatbot Dashboard", page_icon="👩‍💻", layout="wide")
 
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+MODELS_DIR = Path("ml/models")
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+st.title("📊 Chatbot Admin Dashboard")
+
+# Mongo collections
 chats = db["chats"]
 unanswered = db["unanswered"]
 faq = db["faq"]
 default_chat = db["default_chat"]
-knowledge = db["knowledge"] 
+knowledge = db["knowledge"]
 
-st.set_page_config(page_title="Dashboard", page_icon="👩‍💻")
-st.title("🧠 Chatbot Admin Dashboard")
+# --- Upload CSV + Train Models ---
+st.subheader("📤 Upload CSV & Train Models")
 
-with st.expander("➕ Add New Data"):
-    insert_data_streamlit(faq, default_chat, knowledge)
+uploaded_file = st.file_uploader("Upload a CSV file to train the models", type=["csv"])
+if uploaded_file:
+    csv_path = DATA_DIR / uploaded_file.name
+    with open(csv_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    st.success(f"✅ CSV saved at `{csv_path}`")
+
+    df = pd.read_csv(csv_path)
+    st.dataframe(df.head())
+
+    if st.button("🚀 Train Models"):
+        with st.spinner("Training models..."):
+            try:
+                train_and_save_models_from_csv(csv_path)
+                train_and_save_kmeans_from_csv(csv_path)
+                st.success("✅ Models trained and saved in ml/models/")
+            except Exception as e:
+                st.error(f"Error training models: {e}")
+
+# --- Tabs for Management ---
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📚 FAQs",  # quick questions
-    "❓ Unanswered",  # display questions unanswered
-    "📈 Chat Logs",  # Audit and export conversations
-    "📄 Knowledge Articles", # manange articles 
-    "📊 User Stats 💡"
+    "📚 FAQs",
+    "📄 Knowledge Articles",
+    "💬 Chat History & Feedback",
+    "🗄️ Quick MongoDB Chats Editor",
+    "📊 User & Message Stats"
 ])
 
-def export_chat_history(chat_history):
-    if not chat_history:
-        st.info("No messages to export.")
-        return
-    df = pd.DataFrame(chat_history)
-    csv = df.to_csv(index=False)
-    st.download_button(
-        label="⬇️ Export Chat History as CSV",
-        data=csv,
-        file_name=f"chat_{st.session_state.session_id}.csv",
-        mime="text/csv",
-    )
-
+# === TAB 1: FAQs Management ===
 with tab1:
-    st.subheader("FAQs")
-    data = list(faq.find())
+    st.subheader("📚 FAQs")
 
-    for doc in data:
-        if "question" in doc and "answer" in doc:
-            st.markdown(f"**Q:** {doc['question']}")
-            st.write(f"**A:** {doc['answer']}")
-        
-            col1, col2 = st.columns([1,1])
-            with col1:
-                if st.button("📝 Edit", key=f"edit_{doc['_id']}"):
-                    new_q = st.text_input("Edit Question", value=doc["question"], key=f"q_{doc['_id']}")
-                    new_a = st.text_area("Edit Answer", value=doc["answer"], key=f"a_{doc['_id']}")
-                    if st.button("✅ Save Changes", key=f"save_{doc['_id']}"):
-                        faq.update_one({"_id": doc["_id"]}, {"$set": {"question": new_q, "answer": new_a}})
-                        st.success("Updated!")
-                        st.rerun()
-            with col2:
-                if st.button("🗑️ Delete", key=f"delete_{doc['_id']}"):
-                    faq.delete_one({"_id": doc["_id"]})
-                    st.warning("Deleted!")
-                    st.rerun()
-            st.write("---")
-        else: 
-            st.warning(f"⚠️ Skipping malformed entry with ID: {doc.get('_id')}")
+    if st.button("➕ Add New FAQ"):
+        st.session_state['adding_new_faq'] = True
 
+    if st.session_state.get('adding_new_faq'):
+        with st.form("add_new_faq_form"):
+            new_q = st.text_input("Question")
+            new_a = st.text_area("Answer")
+            submitted = st.form_submit_button("Save New FAQ")
+            cancelled = st.form_submit_button("Save New FAQ")
+
+            if submitted:
+                faq.insert_one({"question": new_q, "answer": new_a})
+                st.success("New FAQ added!")
+                del st.session_state['adding_new_faq']
+                st.rerun()
+
+            if cancelled:
+                del st.session_state['adding_new_faq']
+                st.rerun()
+
+    faqs = list(faq.find())
+    for doc in faqs:
+        st.markdown(f"**Q:** {doc.get('question', '')}")
+        st.write(f"**A:** {doc.get('answer', '')}")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📝 Edit", key=f"edit_faq_{doc['_id']}"):
+                st.session_state['editing_faq_id'] = str(doc['_id'])
+                st.session_state['editing_faq_question'] = doc.get('question', '')
+                st.session_state['editing_faq_answer'] = doc.get('answer', '')
+                st.rerun()
+        with col2:
+            if st.button("🗑️ Delete", key=f"delete_faq_{doc['_id']}"):
+                faq.delete_one({"_id": doc["_id"]})
+                st.success("FAQ deleted!")
+                st.rerun()
+
+        st.markdown("---")
+
+    if st.session_state.get('editing_faq_id'):
+        with st.form("edit_faq_form"):
+            q = st.text_input("Edit question", value=st.session_state.get('editing_faq_question', ''))
+            a = st.text_area("Edit answer", value=st.session_state.get('editing_faq_answer', ''))
+            submitted = st.form_submit_button("Save FAQ")
+            cancelled = st.form_submit_button("Cancel")
+
+            if submitted:
+                faq.update_one(
+                    {"_id": ObjectId(st.session_state['editing_faq_id'])},
+                    {"$set": {"question": q, "answer": a}}
+                )
+                st.success("FAQ updated!")
+                del st.session_state['editing_faq_id']
+                del st.session_state['editing_faq_question']
+                del st.session_state['editing_faq_answer']
+                st.rerun()
+            if cancelled:
+                del st.session_state['editing_faq_id']
+                del st.session_state['editing_faq_question']
+                del st.session_state['editing_faq_answer']
+                st.rerun()
+
+# === TAB 2: Knowledge Articles ===
 with tab2:
-    st.subheader("Unanswered Questions")
-    data = list(unanswered.find())
-    for doc in data:
-        st.markdown(f"**Question:** {doc['question']}")
-        st.write(f"From: {doc['user_id']} | At: {doc['timestamp']}")
+    st.subheader("📄 Knowledge Articles")
 
-        if st.button("Add as FAQ", key=f"add_{doc['_id']}"):
-        # Use a modal-like approach using session state to edit
-            st.session_state['edit_faq'] = {
-                "id": str(doc['_id']),
-                "question": doc['question'],
-                "answer": ""
-            }
-            st.rerun()
-    
-    if 'edit_faq' in st.session_state:
-        faq = st.session_state['edit_faq']
-        st.markdown(f"### Editing FAQ for: {faq['question']}")
-        faq['answer'] = st.text_area("Answer", value=faq.get('answer', ''))
-        if st.button("Save FAQ"):
-            # Save FAQ to faq collection
-            faq.insert_one({
-                "question": faq['question'],
-                "answer": faq['answer']
-            })
-            # Remove from unanswered
-            unanswered.delete_one({"_id": ObjectId(faq['id'])})
-            st.success("FAQ added successfully!")
-            del st.session_state['edit_faq']
-            st.rerun()
+     # Add New Article Button and Form
+    if st.button("➕ Add New Article"):
+        st.session_state['adding_new_article'] = True
 
-        if st.button("Cancel"):
-            del st.session_state['edit_faq']
-            st.rerun()
-            
-        st.write("---")
+    if st.session_state.get('adding_new_article'):
+        with st.form("add_new_article_form"):
+            new_t = st.text_input("Title")
+            new_c = st.text_area("Content")
+            submitted = st.form_submit_button("Save New Article")
+            cancelled = st.form_submit_button("Cancel")
 
+            if submitted:
+                knowledge.insert_one({
+                    "title": new_t,
+                    "content": new_c,
+                    "import_timestamp": datetime.now()
+                })
+                st.success("New article added!")
+                del st.session_state['adding_new_article']
+                st.rerun()
+            if cancelled:
+                del st.session_state['adding_new_article']
+                st.rerun()
+
+    articles = list(knowledge.find())
+    for article in articles:
+        st.markdown(f"### 📘 {article.get('title', 'No Title')}")
+        st.write(article.get("content", "No content"))
+        st.markdown(f"🕒 Imported: {article.get('import_timestamp', '')}")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button(f"✏️ Edit Article {article['_id']}", key=f"edit_article_{article['_id']}"):
+                st.session_state['editing_article_id'] = str(article['_id'])
+                st.session_state['editing_article_title'] = article.get('title', '')
+                st.session_state['editing_article_content'] = article.get('content', '')
+                st.rerun()
+        with col2:
+            if st.button(f"🗑️ Delete Article {article['_id']}", key=f"delete_article_{article['_id']}"):
+                knowledge.delete_one({"_id": article["_id"]})
+                st.success("Article deleted!")
+                st.rerun()
+
+        st.markdown("---")
+
+    if st.session_state.get('editing_article_id'):
+        with st.form("edit_article_form"):
+            t = st.text_input("Title", value=st.session_state.get('editing_article_title', ''))
+            c = st.text_area("Content", value=st.session_state.get('editing_article_content', ''))
+            submitted = st.form_submit_button("Save Article")
+            cancelled = st.form_submit_button("Cancel")
+
+            if submitted:
+                knowledge.update_one(
+                    {"_id": ObjectId(st.session_state['editing_article_id'])},
+                    {"$set": {"title": t, "content": c}}
+                )
+                st.success("Article updated!")
+                del st.session_state['editing_article_id']
+                del st.session_state['editing_article_title']
+                del st.session_state['editing_article_content']
+                st.rerun()
+            if cancelled:
+                del st.session_state['editing_article_id']
+                del st.session_state['editing_article_title']
+                del st.session_state['editing_article_content']
+                st.rerun()
+
+# === TAB 3: Chat History ===
 with tab3:
-    st.subheader("📈 Chat Logs")
+    st.subheader("💬 Chat History")
 
-    # 🔍 Search bar for session data
-    search_term = st.text_input("Search chat sessions", "")
+    search_term = st.text_input("Search sessions by user ID or message content", key="search_chat")
+
     query = {}
-
     if search_term:
         query = {
             "$or": [
                 {"user_id": {"$regex": search_term, "$options": "i"}},
-                {"messages.question": {"$regex": search_term, "$options": "i"}},
-                {"messages.answer": {"$regex": search_term, "$options": "i"}},
+                {"messages.text": {"$regex": search_term, "$options": "i"}},
             ]
         }
 
-    # Get list of session chats
-    chat_sessions = list(chats.find(query).sort("last_updated", -1).limit(100))
-
-    all_msgs = []  # Collect all logs across sessions
+    chat_sessions = list(chats.find(query).sort("start_time", -1).limit(50))
 
     if chat_sessions:
         for chat in chat_sessions:
@@ -140,191 +224,88 @@ with tab3:
 
             st.markdown(f"### 👤 User: `{user_id}` | 🏷️ Session: `{session_id}` | 📅 Started: {readable_time}")
 
-            export_rows = []  # For per-session export with metadata
+            for i, msg in enumerate(messages):
+                sender = msg.get("sender", "N/A")
+                text = msg.get("text", "N/A")
+                timestamp = msg.get("timestamp")
+                ts_str = timestamp.strftime('%Y-%m-%d %H:%M:%S') if isinstance(timestamp, datetime) else str(timestamp)
+                feedback = msg.get("feedback", "")
 
-            if messages:
-                for i, msg in enumerate(messages):
-                    question = msg.get("question", "N/A")
-                    answer = msg.get("answer", "N/A")
-                    sentiment = msg.get("sentiment", "N/A")
-                    priority = msg.get("priority", "N/A")
-                    timestamp = msg.get("timestamp")
-                    ts_str = timestamp.strftime('%Y-%m-%d %H:%M:%S') if isinstance(timestamp, datetime) else str(timestamp)
+                st.write(f"**{sender}:** {text}  _(at {ts_str})_")
 
-                    st.markdown(f"**Q{i+1}:** {question}")
-                    st.markdown(f"**A:** {answer}")
-                    st.markdown(f"🧠 Sentiment: `{sentiment}`   🚨 Priority: `{priority}`   🕒 {ts_str}")
-                    st.markdown("---")
-
-                    row = {
-                        "session_id": session_id,
-                        "createdAt": readable_time,
-                        "email": user_id,
-                        "question": question,
-                        "answer": answer,
-                        "sentiment": sentiment,
-                        "priority": priority,
-                        "thumbs_up": msg.get("thumbs_up", False),
-                        "thumbs_down": msg.get("thumbs_down", False),
-                        "timestamp": ts_str
-                    }
-
-                    export_rows.append(row)
-                    all_msgs.append(row)
-
-                # 👇 Per-Session Export Button
-                df_session = pd.DataFrame(export_rows)
-                csv_session = df_session.to_csv(index=False).encode("utf-8")
-
-                st.download_button(
-                    label="⬇️ Export This Session as CSV",
-                    data=csv_session,
-                    file_name=f"{session_id}_chat.csv",
-                    mime="text/csv",
-                    key=f"export_{session_id}"
+                new_feedback = st.selectbox(
+                    "Feedback",
+                    options=["", "positivo", "negativo"],
+                    index=["", "positivo", "negativo"].index(feedback) if feedback in ["positivo", "negativo"] else 0,
+                    key=f"feedback_{chat['_id']}_{i}"
                 )
+                if new_feedback != feedback:
+                    update_message_feedback(chat["_id"], i, new_feedback)
+                    st.success("✅ Feedback updated!")
 
-            else:
-                st.info("No messages found for this session.")
+            st.markdown("---")
 
-            st.markdown("----")
-
-        # ✅ All-Sessions Export Button
-        if all_msgs:
-            df_all = pd.DataFrame(all_msgs)
-            csv_all = df_all.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="⬇️ Export All Chat Logs as CSV",
-                data=csv_all,
-                file_name="all_chat_logs.csv",
-                mime="text/csv"
-            )
     else:
         st.info("No chat sessions found.")
 
+# === TAB 4: Quick MongoDB Chats Editor ===
 with tab4:
-    st.subheader("📄 Knowledge Articles")
+    st.subheader("🗄️ Quick MongoDB Chats Editor")
 
-    articles = list(knowledge.find())
+    df_chats = pd.DataFrame(list(chats.find()))
+    if not df_chats.empty:
+        df_chats["_id"] = df_chats["_id"].astype(str)  # Convert ObjectId to str for editing
+        edited_df = st.data_editor(df_chats, num_rows="dynamic")
 
-    if articles:
-        for article in articles:
-            st.markdown(f"### 📘 {article.get('title', 'No Title')}")
-            st.write(article.get("content", "No content provided"))
-            st.markdown(f"🕒 Imported: {article.get('import_timestamp')}")
-            
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                if st.button("✏️ Edit", key=f"edit_article_{article['_id']}"):
-                    new_title = st.text_input("Edit Title", value=article.get("title", ""), key=f"title_{article['_id']}")
-                    new_content = st.text_area("Edit Content", value=article.get("content", ""), key=f"content_{article['_id']}")
-                    if st.button("✅ Save", key=f"save_article_{article['_id']}"):
-                        knowledge.update_one(
-                            {"_id": article["_id"]},
-                            {"$set": {"title": new_title, "content": new_content}}
-                        )
-                        st.success("✅ Article updated!")
-                        st.rerun()
-            
-            with col2:
-                if st.button("🗑️ Delete", key=f"delete_article_{article['_id']}"):
-                    knowledge.delete_one({"_id": article["_id"]})
-                    st.warning("🗑️ Article deleted!")
-                    st.rerun()
-            st.write("---")
-    else:
-        st.info("No knowledge articles found. Add one using the importer above.")
+        if st.button("💾 Save changes"):
+            for _, row in edited_df.iterrows():
+                doc_id = ObjectId(row["_id"])
+                updated_doc = row.drop(labels=["_id"]).to_dict()
+                chats.update_one({"_id": doc_id}, {"$set": updated_doc})
+            st.success("Chats collection updated!")
 
-with tab5:
-    st.subheader("📊 Total Sessions per User")
-    stats = chats.aggregate([
-        {"$group": {
-            "_id": "$user_id", 
-            "total_sessions": {
-                "$sum": 1}
-            }},
-        {"$sort": {"total_sessions": -1}}
-    ])
+    # --- Delete a chat document by _id ---
+    delete_id = st.text_input("Delete chat by _id (paste ObjectId here):")
+    if st.button("Delete document"):
+        try:
+            oid = ObjectId(delete_id)
+            result = chats.delete_one({"_id": oid})
+            if result.deleted_count > 0:
+                st.success("Document deleted!")
+            else:
+                st.warning("No document found with that _id.")
+        except Exception as e:
+            st.error(f"Invalid _id or error: {e}")
 
-    data = list(stats)
-    if data:
-        df = pd.DataFrame(data).rename(columns={"_id": "User", "total_sessions": "Total Sessions"})
-        st.table(df)
-    else:
-        st.info("No session data to show.")
+# === TAB 5: User & Message Stats ===
+with tab5:        
+    st.subheader("📊 User & Message Statistics")
 
-    st.subheader("🎯 Message Priority Distribution")
+    total_chats = chats.count_documents({})
+    total_faqs = faq.count_documents({})
+    total_knowledge = knowledge.count_documents({})
+
+    st.write(f"Total chat sessions: {total_chats}")
+    st.write(f"Total FAQs: {total_faqs}")
+    st.write(f"Total Knowledge Articles: {total_knowledge}")
+
+    
+    # Example: Sentiment distribution
     pipeline = [
         {"$unwind": "$messages"},
-        {"$group": {
-            "_id": "$messages.priority",
-            "count": {"$sum": 1}
-        }},
-        {"$sort": {"count": -1}}
+        {"$group": {"_id": "$messages.sentiment", "count": {"$sum": 1}}}
     ]
+    sentiment_counts = list(chats.aggregate(pipeline))
+    df_sentiment = pd.DataFrame(sentiment_counts).rename(columns={"_id": "Sentiment", "count": "Count"})
 
-    result = list(chats.aggregate(pipeline))
-    if result:
-        df = pd.DataFrame(result).rename(columns={"_id": "priority", "count": "count"})
-        pie = alt.Chart(df).mark_arc().encode(
-            theta=alt.Theta(field="count", type="quantitative"),
-            color=alt.Color(field="priority", type="nominal"),
-            tooltip=[alt.Tooltip("priority", title="Priority"), alt.Tooltip("count", title="Count")]
-        ).properties(width=400, height=400)
-
-        st.altair_chart(pie, use_container_width=True)
-    else:
-        st.info("No messages found for priority analysis.")
-    
-    st.subheader("🧠 Message Sentiment Distribution")
-    sentiment_pipeline = [
-        {"$unwind": "$messages"},
-        {"$group": {"_id": "$messages.sentiment", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}}
-    ]
-    sentiment_result = list(chats.aggregate(sentiment_pipeline))
-    if sentiment_result:
-        df_sentiment = pd.DataFrame(sentiment_result).rename(columns={"_id": "Sentiment", "count": "Count"})
-        chart_sentiment = alt.Chart(df_sentiment).mark_arc().encode(
-            theta=alt.Theta(field="Count", type="quantitative"),
-            color=alt.Color(field="Sentiment", type="nominal"),
-            tooltip=[alt.Tooltip("Sentiment"), alt.Tooltip("Count")]
-        ).properties(width=400, height=400)
-        st.altair_chart(chart_sentiment, use_container_width=True)
-    else:
-        st.info("No messages found for sentiment analysis.")
-
-    st.subheader("👍 Thumbs Up / 👎 Thumbs Down Feedback Counts")
-    
-    # Aggregate thumbs up/down counts from chat messages
-    feedback_pipeline = [
-        {"$unwind": "$messages"},
-        {"$group": {
-            "_id": None,
-            "thumbs_up": {"$sum": {"$cond": [{"$eq": ["$messages.thumbs_up", True]}, 1, 0]}},
-            "thumbs_down": {"$sum": {"$cond": [{"$eq": ["$messages.thumbs_down", True]}, 1, 0]}}
-        }}
-    ]
-
-    feedback_result = list(chats.aggregate(feedback_pipeline))
-    if feedback_result:
-        thumbs_up = feedback_result[0].get("thumbs_up", 0)
-        thumbs_down = feedback_result[0].get("thumbs_down", 0)
-
-        st.markdown(f"👍 Total Likes: `{thumbs_up}`        👎 Total Dislikes: `{thumbs_down}`")
-
-        feedback_df = pd.DataFrame({
-            "Feedback": ["Thumbs Up", "Thumbs Down"],
-            "Count": [thumbs_up, thumbs_down]
-        })
-        
-        chart_feedback = alt.Chart(feedback_df).mark_bar().encode(
-            x=alt.X('Feedback', sort=None),
+    if not df_sentiment.empty:
+        chart = alt.Chart(df_sentiment).mark_bar().encode(
+            x='Sentiment',
             y='Count',
-            color='Feedback',
-            tooltip=['Feedback', 'Count']
-        ).properties(width=400, height=300)
-
-        st.altair_chart(chart_feedback, use_container_width=True)
+            color='Sentiment'
+        ).properties(title="Sentiment Distribution in Messages")
+        st.altair_chart(chart, use_container_width=True)
     else:
-        st.info("No feedback data found.")
+        st.info("No sentiment data available.")
+
+    # You can add more stats similarly (priority, feedback, user message counts, etc.)

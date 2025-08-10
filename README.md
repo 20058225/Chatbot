@@ -17,23 +17,19 @@ A Streamlit-based AI Chatbot application with support for sentiment and priority
 ## 🧰 Technologies
 
 - Python 3.11
-- Streamlit
-- MongoDB (via `pymongo`)
+- Streamlit- MongoDB (via `pymongo`)
 - scikit-learn, joblib
-- Docker
-- GitHub Actions
+- Docker- GitHub Actions
 
 ---
 
 ## 📂 Project Structure
 ```
-.
-├── ml/
+.├── ml/
 │ └── models/
 │ ├── sentiment_pipeline.joblib
 │ └── priority_pipeline.joblib
-├── data/
-│ └── tickets.csv
+├── data/│ └── tickets.csv
 ├── pages/
 │ ├── Chatbot.py
 │ └── Dashboard.py
@@ -57,16 +53,11 @@ A Streamlit-based AI Chatbot application with support for sentiment and priority
 
 ```bash
 # Clone repo and move into folder
-git clone https://github.com/20058225/chatbot-app.git
-cd chatbot-app
-
+git clone https://github.com/20058225/chatbot-app.gitcd chatbot-app
 # Create venv and activate it
-python3 -m venv myenv
-source myenv/bin/activate
-
+python3 -m venv myenvsource myenv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
-
 # Run the app
 streamlit run Home.py
 ```
@@ -84,13 +75,13 @@ docker build -t chatbot-app .
 
 # Run container
 docker run -p 8501:8501 --env-file=config/.env chatbot-app
-
 ```
 
 ---
 
 ## 🔐 Environment Variables (.env)
 Place this file in config/.env:
+
 ```
 API_MONGO=mongodb+srv://<your-connection>
 OPENAI_API_KEY=sk-...
@@ -125,10 +116,11 @@ This dataset is used to train and evaluate both ML pipelines:
 - **Sentiment classification** → `positive`, `neutral`, `negative`
 - **Priority classification** → `High`, `Medium`, `Low`
 
-### 🔍 Example rows:
+---
 
-```csv
-description,sentiment,priority
+### 🔍 Example rows:
+```
+csvdescription,sentiment,priority
 "I can't log in to my account",negative,High
 "My computer is running slow",negative,Medium
 "How do I reset my email password?",neutral,Medium
@@ -136,20 +128,21 @@ description,sentiment,priority
 "Request for software upgrade",neutral,Low
 "Thank you for fixing my internet issue",positive,Low
 ```
+
 ---
 
 ## 🔄 CI/CD with GitHub Actions
+
 - Triggers on push to main
 
 - Installs dependencies and runs pytest
 
-- Builds Docker image for deployment
-
-See .github/workflows/chatbot-app.yml.
+- Builds Docker image for deploymentSee .github/workflows/chatbot-app.yml.
 
 ---
 
 ## 📄 License
+
 MIT © 2025 Brenda Lopes — [LICENSE](./LICENSE)
 
 ---
@@ -171,6 +164,7 @@ MIT © 2025 Brenda Lopes — [LICENSE](./LICENSE)
 ![FAQs](assets/dashboard_faqs.png)
 ---
 ![Articles](assets/dashboard_articles.png)
+
 ---
 
 ### 📥 FAQ & Default Message Import
@@ -179,11 +173,10 @@ MIT © 2025 Brenda Lopes — [LICENSE](./LICENSE)
 ![Import 2](assets/import_2.png)
 
 ---
+
 ## 🙋‍♀️ About
 This project was developed as part of the MSc in Computing & Information Systems at Dublin Business School. The goal is to improve ticket triage using NLP, ML and a chatbot interface.
 
 ```
 
 ```
-
-

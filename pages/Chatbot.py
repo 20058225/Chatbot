@@ -1,3 +1,5 @@
+# pages/Chatbot.py
+
 import streamlit as st
 import yagmail
 import random
@@ -6,22 +8,43 @@ import os
 from services.mongo import db
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-import uuid
+from numpy.linalg import norm
+import uuid as _uuid
+import pandas as pd
+import numpy as np
+import torch
+import re
+from transformers import GPT2Tokenizer, GPT2LMHeadModel, BertTokenizer, BertModel
 import joblib
 import logging
 from difflib import SequenceMatcher
-from ml.sentiment import MODEL_PATH as SENT_MODEL
-from ml.priority import MODEL_PATH as PRIO_MODEL
 
-logging.info("🔧 Recarregando Chatbot.py...")
+from services import ml as ml_services
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logging.info("🔄️ Reloading Chatbot.py...")
 load_dotenv(dotenv_path="config/.env")
 
-_sentiment_model = joblib.load(SENT_MODEL)
-_priority_model = joblib.load(PRIO_MODEL)
+# wrappers defensivos
+try:
+    predict_sentiment = ml_services.predict_sentiment
+    predict_priority = ml_services.predict_priority
+    _ml_available = True
+except Exception as e:
+    logging.warning("ML services not available: %s", e)
+    _ml_available = False
 
-genai.configure(api_key=os.getenv("GOOGLE_GENAI_API_KEY"))
-model = genai.GenerativeModel("gemini-2.5-pro")
+    def predict_sentiment(texts):
+        return ["unknown" for _ in texts]
+    def predict_priority(texts):
+        return ["Low" for _ in texts]
+
+try: 
+    genai.configure(api_key=os.getenv("GOOGLE_GENAI_API_KEY"))
+    model = genai.GenerativeModel("gemini-2.5-pro")
+except Exception as e:
+    logging.warning("Failed to configure genai: %s", e)
+    model = None
 
 email_admin = os.getenv("EMAIL_ADMIN")
 email_pass = os.getenv("EMAIL_PASS")
@@ -29,68 +52,67 @@ email_pass = os.getenv("EMAIL_PASS")
 users = db["users"]
 chats = db["chats"]
 faq = db["faq"]
+knowledge = db["knowledge"]
 unanswered = db["unanswered"]
 default_chat = db["default_chat"]
 
+@st.cache_data
+def load_faq_df():
+    return pd.read_csv("data/tickets.csv")
 
-def is_similar(a, b):
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio() > 0.85
+
+@st.cache_resource(show_spinner=False)
+def load_models():
+    bert_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+    bert_model = BertModel.from_pretrained("bert-base-uncased")
+    gpt2_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    gpt2_model = GPT2LMHeadModel.from_pretrained("gpt2")
+    gpt2_tokenizer.pad_token = gpt2_tokenizer.eos_token
+    return bert_tokenizer, bert_model, gpt2_tokenizer, gpt2_model
+
+bert_tokenizer, bert_model, gpt2_tokenizer, gpt2_model = load_models()
 
 
-def get_ai_reply(user_input):
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (norm(a) * norm(b) + 1e-8)
+
+
+def get_bert_embeddings(text):
+    inputs = bert_tokenizer(text, return_tensors="pt", truncation=True, padding=True)
+    with torch.no_grad():
+        outputs = bert_model(**inputs)
+    emb = outputs.last_hidden_state.mean(dim=1).squeeze()
+    return emb.detach().cpu().numpy()
+
+
+def generate_gpt2_reply(prompt, max_length=50):
+    inputs = gpt2_tokenizer(prompt, return_tensors="pt")
+    with torch.no_grad():
+        outputs = gpt2_model.generate(
+            **inputs,
+            max_length=max_length,
+            pad_token_id=gpt2_tokenizer.eos_token_id
+        )
+    reply = gpt2_tokenizer.decode(outputs[0], skip_special_tokens=True)
+    return reply
+
+
+def predict_sentiment_with_text(text):
     try:
-        # Gather contextual data to send with prompt
-        faq_entries = list(faq.find({}, {"_id": 0}).limit(10))
-        intent_entries = list(default_chat.find_one(
-            {"intents": {"$exists": True}})["intents"])[:5]
-        knowledge_articles = list(
-            db["knowledge"].find(
-                {}, {
-                    "_id": 0}).limit(5))
-
-        # Convert into context strings
-        faq_context = "\n".join(
-            [f"Q: {e['question']}\nA: {e['answer']}" for e in faq_entries]
-        )
-
-        intent_context = "\n".join([
-            f"[Intent: {i['tag']}]\n"
-            f"Patterns: {', '.join(i.get('patterns', []))}\n"
-            f"Responses: {', '.join(i.get('responses', []))}"
-            for i in intent_entries
-        ])
-
-        kb_context = "\n".join(
-            [
-                f"Title: {a['title']}\nContent: {a['content']}"
-                for a in knowledge_articles]
-        )
-
-        full_context = f"""
-You are a support assistant for TechFix Solutions.
-Use the company's FAQ, known intent patterns,
-and support knowledge base to better answer customer questions.
-
-        === FAQs ===
-        {faq_context}
-
-        === Intents ===
-        {intent_context}
-
-        === Knowledge Articles ===
-        {kb_context}
-
-        USER: {user_input}
-        Respond professionally and clearly based on the context above.
-        """.strip()
-
-        # Send message with context in prompt
-        chat = model.start_chat(history=[])
-        response = chat.send_message(full_context)
-        return response.text.strip()
-
+        preds = predict_sentiment([text])
+        return str(preds[0])
     except Exception as e:
-        return f"Sorry, there was an error with the AI: {e}"
+        logging.error("predict_sentiment error: %s", e)
+        return "unknown"
+
+
+def predict_priority_with_text(text):
+    try:
+        preds = predict_priority([text])
+        return str(preds[0])
+    except Exception as e:
+        logging.error("predict_priority error: %s", e)
+        return "Low"
 
 
 st.set_page_config(page_title="Chatbot", page_icon="🤖")
@@ -101,103 +123,223 @@ if "user" not in st.session_state:
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-
-def predict_sentiment(text):
-    return _sentiment_model.predict([text])[0]
-
-
-def predict_priority(text):
-    return _priority_model.predict([text])[0]
-
+if "chat_loaded_for_session" not in st.session_state:
+    st.session_state.chat_loaded_for_session = None
 
 def generate_chat_id():
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    short_uid = str(uuid.uuid4())[:8]
+    short_uid = str(_uuid.uuid4())[:8]
     return f"{timestamp}-{short_uid}"
 
 
-def find_default_answer(response_type):
-    doc = default_chat.find_one({"intents": {"$exists": True}})
-    if not doc:
-        return "I don't understand that."
-    for intent in doc["intents"]:
-        if intent["tag"].lower() == response_type.lower():
-            return random.choice(
-                intent.get(
-                    "responses",
-                    ["I don't understand that."]))
-    return "I don't understand that."
+def is_similar(a, b, threshold=0.85):
+    if a is None or b is None:
+        return False
+    a, b = str(a).lower(), str(b).lower()
+    return SequenceMatcher(None, a, b).ratio() > threshold
 
 
-def find_known_answer(user_input):
-    if len(user_input.strip()) < 2:
-        return None
-    doc = faq.find_one(
-        {"question": {"$regex": fr"\b{user_input}\b", "$options": "i"}}
-    )
-    logging.info(f"find_known_answer:{doc}")
-    return doc["answer"] if doc else None
+def get_ai_reply(user_input):
+    try:
+        faq_entries = list(faq.find({}, {"_id": 0}).limit(10))
 
+        default_doc = default_chat.find_one({"intents": {"$exists": True}}) or {}
+        intent_entries = default_doc.get("intents", [])[:5]
+        
+        knowledge_articles = list(knowledge.find({}, {"_id": 0}).limit(5))
+        
+        faq_context = "\n".join([f"Q: {e.get('question','')}\nA: {e.get('answer','')}" 
+            for e in faq_entries])
 
-def find_knowledge_answer(user_input):
-    if len(user_input.strip()) < 4:
-        return None
-    doc = db["knowledge"].find_one({"$or": [
-        {"title": {"$regex": user_input, "$options": "i"}},
-        {"content": {"$regex": user_input, "$options": "i"}}
-    ]})
-    logging.info(f"find_knowledge_answer:{doc}")
-    return doc.get("content") if doc else None
+        intent_context = "\n".join([
+            f"[Intent: {i.get('tag','')}]\n"
+            f"Patterns: {', '.join(i.get('patterns', []))}\n"
+            f"Responses: {', '.join(i.get('responses', []))}"
+            for i in intent_entries
+        ])
 
+        kb_context = "\n".join([f"Title: {a.get('title','')}\nContent: {a.get('content','')}"
+            for a in knowledge_articles])
 
-def find_intent_answer(user_input):
-    user_input = user_input.strip().lower()
-    doc = default_chat.find_one({"intents": {"$exists": True}})
-    # logging.info(f"find_intent_answer:{doc}")
+        full_context = f"""
+You are a support assistant for TechFix Solutions.
+Use the company's FAQ, known intent patterns,
+and support knowledge base to better answer customer questions.
 
-    if not doc or "intents" not in doc:
-        return None, None
+=== FAQs ===
+{faq_context}
 
-    for intent in doc["intents"]:
-        for pattern in intent.get("patterns", []):
-            # if pattern.lower() in user_input.lower():
-            if is_similar(pattern, user_input):
-                selected_response = random.choice(intent.get("responses", []))
-                return selected_response, intent["tag"]
-    return None, None
+=== Intents ===
+{intent_context}
+
+=== Knowledge Articles ===
+{kb_context}
+
+USER: {user_input}
+Respond professionally and clearly based on the context above.
+""".strip()
+
+        chat = model.start_chat(history=[])
+        response = chat.send_message(full_context)
+        return response.text.strip()
+
+    except Exception as e:
+        logging.error(f"get_ai_reply error: {e}")
+
+        try:
+            return generate_gpt2_reply(user_input)
+        except Exception:
+            return f"Sorry, there was an error with the AI: {e}"
 
 
 def generate_bot_response(user_input):
     logging.info("👁️ Checking Patterns...")
-    answer, tag = find_intent_answer(user_input)
+    answer, tag = find_default_answer(user_input)
     if answer:
         logging.info("✅ Matched Intent.")
-        return answer, tag
+        return answer, tag or "intent"
 
     logging.info("👁️ Checking FAQ...")
     answer = find_known_answer(user_input)
     if answer:
         logging.info("✅ Matched FAQ.")
-        return answer
+        return answer, "faq"
 
     logging.info("👁️ Checking Knowledge Base...")
-    if len(user_input) > 4:
-        answer = find_knowledge_answer(user_input)
-        if answer:
-            logging.info("✅ Matched Knowledge.")
-            return answer, None
+    answer = find_knowledge_answer(user_input)
+    if answer:
+        logging.info("✅ Matched Knowledge.")
+        return answer, "kb"
 
     logging.info("🤖 Calling AI model...")
     answer = get_ai_reply(user_input)
-
-    # if not answer:
-    #   logging.error("⚠️ Nothing worked — using fallback.")
-    #  answer = find_default_answer("fallback")
-    # handle_unanswered(
-    # st.session_state.user, user_input, st.session_state.req_type)
-
     return answer, "ai"
 
+
+def find_default_answer(user_input):
+    user_input = user_input.strip().lower()
+    doc = default_chat.find_one({"intents": {"$exists": True}}) or {}
+    intents = doc.get("intents", [])
+    if not "intents":
+        return None, None
+
+    for intent in intents:
+        for pattern in intent.get("patterns", []):
+            if is_similar(pattern, user_input):
+                selected_response = random.choice(intent.get("responses", [])) if intent.get("reponse") else None
+                return selected_response, intent.get("tag", "intent")
+    return None, None
+
+
+def find_known_answer(user_input):
+    user_input = user_input.strip()
+    if len(user_input) < 2:
+        return None
+    
+    safe = re.escape(user_input)
+    doc = faq.find_one(
+        {"question": {"$regex": safe, "$options": "i"}})
+    logging.info(f"find_known_answer:{doc}")
+    if doc and doc.get("answer"):
+        return doc["answer"]
+
+    for f in faq.find({}, {"question": 1, "answer": 1}).limit(50):
+        q = f.get("question", "")
+        if SequenceMatcher(None, q.lower(), user_input.lower()).ratio() > 0.75:
+            return f.get("answer")
+    return None
+
+
+def find_knowledge_answer(user_input):
+    if len(user_input.strip()) < 4:
+        return None
+    safe = re.escape(user_input)
+    doc = knowledge.find_one(
+        {"$or": [
+            {"title": {"$regex": safe, "$options": "i"}}, 
+            {"content": {"$regex": safe, "$options": "i"}},
+        ]
+    })
+    return doc.get("content") if doc else None
+
+
+def save_chat_message(
+        user,
+        question,
+        answer,
+        tag=None,
+        sentiment=None,
+        priority=None,
+        embedding=None,
+        user_time=None,
+        bot_time=None,
+        thumbs_up=False,
+        thumbs_down=False):
+    
+    session_id = st.session_state.session_id
+    timestamp = datetime.now(timezone.utc)
+
+    if embedding is not None:
+        try:
+            if isinstance(embedding, torch.Tensor):
+                embedding = embedding.detach().cpu().tolist()
+            elif isinstance(embedding, np.ndarray):
+                embedding = embedding.tolist()
+            else:
+                embedding = list(embedding)
+        except Exception:
+            try:
+                embedding = np.array(embedding).tolist()
+            except Exception:
+                embedding = None
+    
+    if not session_id:
+        session_id = generate_chat_id()
+        st.session_state.session_id = session_id
+
+        new_session = {
+                "session_id": session_id,
+                "user_id": user.get("email") if user else None,
+                "start_time": timestamp,
+                "messages": [],
+                "last_updated": timestamp
+            }
+        try:
+            chats.insert_one(new_session)
+        except Exception as e:
+            logging.error("Failed to create new session: %s", e)
+            return None, None, None
+
+    message_id = str(_uuid.uuid4())
+    message = {
+        "message_id": message_id,
+        "question": question,
+        "answer": answer,
+        "timestamp": timestamp,
+        "user_time": user_time or timestamp,
+        "bot_time": bot_time or timestamp,
+        "intent_tag": tag,
+        "sentiment": sentiment,
+        "priority": priority,
+        "bert_embedding": embedding,
+        "thumbs_up": bool(thumbs_up),
+        "thumbs_down": bool(thumbs_down)
+    }
+
+    try:
+        chats.update_one(
+            {"session_id": session_id},
+            {
+                "$push": {"messages": message},
+                "$set": {"last_updated": timestamp}
+            },
+            upsert=True
+        )
+        return session_id, message_id, message
+    except Exception as e:
+        logging.error(f"❌ Failed to log conversation: {e}")
+        return None, None, None
+    
 
 def send_email(to, subject, body):
     try:
@@ -205,9 +347,8 @@ def send_email(to, subject, body):
         yag.send(to=to, subject=subject, contents=body)
         logging.info(f"✅ Email sent to {to}")
     except Exception as e:
-        error_msg = f"{type(e).__name__}: {e}"
-        logging.error(f"❌ Email failed: {error_msg}")
-        st.warning(f"⚠️ Failed to send email notification:\n\n`{error_msg}`")
+        logging.error(f"❌ Email failed: {e}")
+        st.error(f"❌ Failed to send email notification:\n\n`{e}`")
 
 
 def handle_unanswered(user, question, request_type="unknown"):
@@ -220,9 +361,8 @@ def handle_unanswered(user, question, request_type="unknown"):
         })
     except Exception as e:
         logging.error("❌ Failed to log unanswered question:", e)
-        st.warning("⚠️ Failed to store unanswered question.")
+        st.error("❌ Failed to store unanswered question.")
 
-    # Notify admin
     subject = (f"[Chatbot - Unanswered] New question from {user['email']}")
     body = (
         f"Question: {question}\n"
@@ -232,9 +372,19 @@ def handle_unanswered(user, question, request_type="unknown"):
     send_email(email_admin, subject, body)
 
 
-def handle_feedback(user, question, answer, liked=False):
+def handle_feedback(user, question, answer, ticket_id, feedback_text, liked=False):
+    feedback_doc = {
+        "ticket_id": ticket_id,
+        "feedback": feedback_text,
+        "timestamp": datetime.now(timezone.utc)
+    }
+    try:
+        db.feedback.insert_one(feedback_doc)
+    except Exception as e:
+        logging.error("Failed to insert feedback: %s", e)
+
     thumbs = "👍" if liked else "👎"
-    subject = (f"[Chatbot - Feedback] {thumbs} from {user['email']}")
+    subject = (f"[Chatbot - Feedback] {thumbs} from {user['email']} | {ticket_id}")
     body = (
         f"User: {user['name']} ({user['email']})\n"
         f"{'Liked' if liked else 'Disliked'} Answer\n\n"
@@ -245,62 +395,36 @@ def handle_feedback(user, question, answer, liked=False):
 
 def get_chat_topic(messages):
     from collections import Counter
-
     tags = [msg.get("intent_tag") for msg in messages if msg.get("intent_tag")]
     if tags:
-        common_tag = Counter(tags).most_common(1)[0][0]
-        return common_tag
-    else:
-        if messages:
-            first_question = messages[0].get("question", "")
-            keywords = first_question.lower().split()[:3]
-            return ", ".join(keywords)
+        return Counter(tags).most_common(1)[0][0]
+    if messages:
+        first_question = messages[0].get("question", "")
+        if not isinstance(first_question, str):
+            first_question = str(first_question)
+        keywords = first_question.lower().split()[:3]
+        return ", ".join(keywords)
     return "No topic"
 
 
-def log_conversation(
-        user,
-        question,
-        answer,
-        tag=None,
-        sentiment=None,
-        priority=None,
-        thumbs_up=False,
-        thumbs_down=False):
-    session_id = st.session_state.session_id
-    timestamp = datetime.now(timezone.utc)
-
-    message = {
-        "question": question,
-        "answer": answer,
-        "timestamp": timestamp,
-        "intent_tag": tag,
-        "sentiment": sentiment,
-        "priority": priority,
-        "thumbs_up": thumbs_up,
-        "thumbs_down": thumbs_down
-    }
-
-    try:
-        chats.update_one(
-            {"session_id": session_id},
-            {
-                "$push": {
-                    "messages": message
-                },
-                "$set": {
-                    "last_updated": timestamp
-                }
-            },
-            upsert=True
-        )
-    except Exception as e:
-        logging.error("❌ Failed to log conversation:", e)
+def reload_chat_history(force=False):
+    session_id = st.session_state.get("session_id")
+    if not session_id:
+        return
+    if st.session_state.get("chat_loaded_for_session") == session_id and not force:
+        return
+    doc = chats.find_one({"session_id": session_id})
+    if doc:
+        st.session_state.chat_history = doc.get("messages", [])
+    else:
+        st.session_state.chat_history = []
+    st.session_state["chat_loaded_for_session"] = session_id
 
 
 def register_form():
     with st.form("register_form"):
         st.subheader("🔐 Start Chat")
+
         email = st.text_input("Your Email")
         name = st.text_input("Your Name")
         submitted = st.form_submit_button("Start Chat")
@@ -320,266 +444,310 @@ def register_form():
                     "$set": {"last_active": datetime.now(timezone.utc)}})
 
             st.session_state.user = user
-            # st.session_state.req_type = req_type
-            logging.info("✅ You're logged in!")
-            st.success("✅ You're logged in!")
+            logging.info("✅ User registered. Starting chat...")
+            st.success("✅ User registered. Starting chat...")
 
-            if "user" not in st.session_state:
-                st.session_state.user = None
-            if "chat_history" not in st.session_state:
-                st.session_state.chat_history = []
-            if "session_id" not in st.session_state:
-                st.session_state.session_id = generate_chat_id()
-            if "chat_start_time" not in st.session_state:
-                st.session_state.chat_start_time = datetime.now(timezone.utc)
-
-            chats.insert_one({
-                "session_id": st.session_state.session_id,
-                "user_id": email,
-                "start_time": datetime.now(timezone.utc),
-                "messages": []
-            })
+            st.session_state.chat_history = []
+            st.session_state.session_id = None
+            st.session_state.chat_start_time = None
 
             st.rerun()
 
 
 def user_details():
+    user = st.session_state.get("user")
+
     if st.sidebar.button("🔓 Logout"):
         st.session_state.user = None
         st.session_state.chat_history = []
+        st.session_state.input_processed = False
         st.rerun()
 
     st.sidebar.markdown("---")
-
     st.sidebar.markdown("### 👤 Account Info")
-    st.sidebar.markdown(f"**Name:** {st.session_state.user['name']}")
-    st.sidebar.markdown(f"**Email:** {st.session_state.user['email']}")
+    st.sidebar.markdown(f"**Name:** {user['name']}")
+    st.sidebar.markdown(f"**Email:** {user['email']}")
 
-    first_seen = st.session_state.user.get("first_seen")
+    first_seen = user.get("first_seen")
+    last_active = user.get("last_active")
+
+    def fmt_date(dt):
+        if isinstance(dt, datetime):
+            return dt.strftime("%Y-%m-%d")
+        return str(dt)
+
     if first_seen:
-        st.sidebar.markdown(
-            f"**First Access:** {first_seen.strftime('%Y-%m-%d')}")
-
-    last_active = st.session_state.user.get("last_active")
+        st.sidebar.markdown(f"**First Access:** {fmt_date(first_seen)}")
     if last_active:
-        st.sidebar.markdown(
-            f"**Last Active:** {last_active.strftime('%Y-%m-%d | %H:%M:%S')}")
+        st.sidebar.markdown(f"**Last Active:** {fmt_date(last_active)}")
 
-    user_email = st.session_state.user["email"]
-    past_chats = list(chats.find(
-        {"user_id": user_email}).sort("start_time", -1))
-
+    user_email = user.get("email")
+    past_chats = list(chats.find({"user_id": user_email}).sort("start_time", -1))
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🧾 Previous Chats")
-    with st.sidebar.expander("🧾 Previous Chats"):
-        for idx, chat in enumerate(past_chats, start=1):
-            session_id = chat.get("session_id")
-            start_time = chat.get("start_time")
-            messages = chat.get("messages", [])
 
+    def load_chat(session_id):
+        chat_data = chats.find_one({"session_id": session_id})
+        if chat_data:
+            st.session_state.session_id = chat_data.get("session_id")
+            st.session_state.chat_start_time = chat_data.get("start_time")
+            st.session_state.chat_history = chat_data.get("messages", [])
+            st.session_state.chat_loaded_for_session = session_id
+            st.success(f"✅ Loaded chat session {session_id}!")
+
+
+    def conversation_load():
+        st.sidebar.markdown("### Select a conversation to load")
+        for idx, msg in enumerate(past_chats, start=1):
+            session_id = msg.get("session_id")
+            start_time = msg.get("start_time")
+            messages = msg.get("messages", [])
             topic = get_chat_topic(messages)
+            display_time = start_time.strftime("%Y-%m-%d %H:%M") if start_time else "Unknown date"
+            button_label = f"📂 {idx} | {topic}\n{display_time}"
 
-            display_time = start_time.strftime(
-                "%Y-%m-%d %H:%M") if start_time else "Unknown date"
+            st.sidebar.button(
+                button_label,
+                key=f"load_{session_id}_{idx}",
+                on_click=load_chat,
+                args=(session_id,))
+    
 
-            button_label = f"📂 Load Chat {idx} | {topic} — {display_time}"
+    with st.sidebar.expander("🧾 Previous Chats"):
+        conversation_load()
 
-            if st.sidebar.button(button_label, key=f"load_{session_id}_{idx}"):
-                st.session_state.session_id = session_id
-                st.session_state.chat_start_time = start_time
-                st.session_state.chat_history = messages
-                logging.info(f"✅ Loaded chat session {session_id}!")
-                st.success(f"✅ Loaded chat session {session_id}!")
-                st.rerun()
+    if st.session_state.get("chat_loaded_success"):
+        st.success(f"✅ Chat loaded successfully!")
+        logging.info(f"✅ Chat loaded successfully!")
+        st.session_state.chat_loaded_success = False
 
 
 def chat_interface():
     st.title("💬 IT Support Chatbot")
 
-    user_input = st.chat_input("Ask a question...", key="user_input")
+    st.session_state.setdefault("chat_history", [])
+    st.session_state.setdefault("last_user_input", "")
 
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+    if st.session_state.get("session_id"):
+        reload_chat_history()
 
-    if (
-        "input_processed" not in st.session_state
-        or st.session_state.input_processed
-    ):
-        st.session_state.input_processed = False
+    ticket_id = st.session_state.get("session_id")
+    if ticket_id:
+        st.info(f"🎟️ Your Ticket ID: `{ticket_id}`.")
 
-    if "session_id" not in st.session_state or not st.session_state.session_id:
-        st.session_state.session_id = generate_chat_id()
-        st.session_state.chat_start_time = datetime.now(timezone.utc)
-        chats.insert_one({
-            "session_id": st.session_state.session_id,
-            "user_id": st.session_state.user["email"],
-            "start_time": st.session_state.chat_start_time,
-            "messages": []
-        })
+    # --- Renderiza histórico ---
+    for idx, msg in enumerate(st.session_state.chat_history):
+        user_time_str = msg.get("user_time")
+        try:
+            user_time_str = user_time_str.strftime("%H:%M:%S") if isinstance(user_time_str, datetime) else str(user_time_str)
+        except Exception:
+            user_time_str = str(user_time_str)
+        st.markdown(f"👩‍💻 **You** ({user_time_str}): {msg.get('question')}")
 
-    ticket_id = st.session_state.session_id
-    st.info(f"🎟️ Your Ticket ID: `{ticket_id}`.")
+        if msg.get("answer"):
+            bot_time = msg.get("bot_time")
+            try:
+                bot_time_str = bot_time.strftime("%H:%M:%S") if isinstance(bot_time, datetime) else str(bot_time)
+            except Exception:
+                bot_time_str = str(bot_time)
+            st.markdown(f"🤖 **Bot** ({bot_time_str}): {msg.get('answer')}")
 
-    if user_input and not st.session_state.input_processed:
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        response = generate_bot_response(user_input)
-
-        if isinstance(response, tuple):
-            answer, tag = response
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("👍", key=f"thumbsup_{idx}"):
+                    handle_feedback(st.session_state.user, msg["question"], msg["answer"],
+                                    st.session_state.get("session_id"), feedback_text="like", liked=True)
+            with col2:
+                if st.button("👎", key=f"thumbsdown_{idx}"):
+                    handle_feedback(st.session_state.user, msg["question"], msg["answer"],
+                                    st.session_state.get("session_id"), feedback_text="dislike", liked=False)
         else:
-            answer = response
-            tag = None
+            elapsed = 0
+            try:
+                elapsed = (datetime.now(timezone.utc) - msg["user_time"]).total_seconds()
+            except Exception:
+                elapsed = 0
+            st.markdown("🤖 **Bot**: ⏳ thinking..." if elapsed < 5 else "🤖 **Bot**: 🔍 still looking...")
 
-        st.session_state.chat_history.append({
-            "question": user_input,
-            "answer": answer,
-            "intent_tag": tag,
-            "sentiment": predict_sentiment(user_input),
-            "priority": predict_priority(user_input),
-            "time": datetime.now(timezone.utc)
-        })
+    # --- Input do usuário ---
+    user_input = st.chat_input("Hello! How can I help you today?", key="user_input")
 
-        st.markdown(f"👩‍💻 **You** ({timestamp}): {user_input}")
-        st.markdown(f"🤖 **Bot** ({timestamp}): {answer}")
-        if tag:
-            st.caption(f"🧠 Tag: `{tag}`")
+    if user_input and user_input != st.session_state.last_user_input:
+        st.session_state.last_user_input = user_input
 
-        log_conversation(
-            st.session_state.user,
-            user_input,
-            answer,
-            tag,
-            st.session_state.chat_history[-1]["sentiment"],
-            st.session_state.chat_history[-1]["priority"]
+        if not st.session_state.get("session_id"):
+            st.session_state.session_id = generate_chat_id()
+            st.session_state.chat_start_time = datetime.now(timezone.utc)
+
+        chats.update_one(
+            {"session_id": st.session_state.session_id},
+            {"$setOnInsert": {
+                "user_id": st.session_state.user.get("email") if st.session_state.user else None,
+                "start_time": st.session_state.chat_start_time,
+                "messages": []
+            }, "$set": {"last_updated": datetime.now(timezone.utc)}},
+            upsert=True
         )
 
-        st.session_state.input_processed = True
+        sentiment_pred = predict_sentiment_with_text(user_input)
+        priority_pred = predict_priority_with_text(user_input)
+        user_time = datetime.now(timezone.utc)
+
+        session_id_ret, message_id, message = save_chat_message(
+            st.session_state.user,
+            user_input,
+            answer=None,
+            tag=None,
+            sentiment=sentiment_pred,
+            priority=priority_pred,
+            embedding=None,
+            user_time=user_time,
+            bot_time=None
+        )
+
+        if message is not None:
+            st.session_state.chat_history.append(message)
+        else:
+            st.session_state.chat_history.append({
+                "message_id": None,
+                "question": user_input,
+                "answer": None,
+                "user_time": user_time
+            })
         st.rerun()
 
+
+    for idx, msg in enumerate(st.session_state.chat_history):
+        if not msg.get("answer"):
+            question = msg.get("question")
+            answer, tag = generate_bot_response(question)
+            bot_time = datetime.now(timezone.utc)            
+            emb = get_bert_embeddings(msg["question"])
+
+            try:
+                emb = get_bert_embeddings(question)
+                emb_list = emb.tolist() if hasattr(emb, "tolist") else list(emb)
+            except Exception:
+                emb_list = None
+
+            st.session_state.chat_history[idx].update({
+                "answer": answer,
+                "bot_time": bot_time,
+                "intent_tag": tag,
+                "bert_embedding": emb_list
+            })
+
+            session_id = st.session_state.get("session_id")
+            message_id = msg.get("message_id")
+            try:
+                if message_id:
+                    chats.update_one(
+                        {"session_id": session_id, "messages.message_id": message_id},
+                        {"$set": {
+                            "messages.$.answer": answer,
+                            "messages.$.bot_time": bot_time,
+                            "messages.$.intent_tag": tag,
+                            "messages.$.bert_embedding": emb_list
+                        }}
+                    )
+                else:
+                    chats.update_one(
+                        {"session_id": session_id},
+                        {"$push": {"messages": {
+                            "message_id": str(_uuid.uuid4()),
+                            "question": question,
+                            "answer": answer,
+                            "timestamp": datetime.now(timezone.utc),
+                            "user_time": msg.get("user_time"),
+                            "bot_time": bot_time,
+                            "intent_tag": tag,
+                            "sentiment": msg.get("sentiment"),
+                            "priority": msg.get("priority"),
+                            "bert_embedding": emb_list
+                        }}}
+                    )
+            except Exception as e:
+                logging.error("Failed to persist bot answer: %s", e)
+
+            st.rerun()
+            break
+
     if st.button("❌ Finish Chat"):
-        logging.info("✅ Conversation closed.")
-        st.success("✅ Conversation closed.")
         st.session_state.user = None
         st.session_state.chat_history = []
-        st.session_state.input_processed = False
+        st.session_state.last_user_input = ""
         st.session_state.session_id = None
         st.session_state.chat_start_time = None
         st.rerun()
 
 
-if not st.session_state.user:
-
+if "user" not in st.session_state or st.session_state.user is None:
     st.subheader("🔐 Start or Resume a Chat")
-
     login_mode = st.radio("How would you like to resume your chat?", [
                           "🆕 Start New Chat", "📧 Email", "🎟️ Ticket ID"])
 
     if login_mode == "📧 Email":
         email = st.text_input("Your Email")
+
         if st.button("Login via Email"):
             user = users.find_one({"email": email})
+            
             if user:
-                users.update_one({"email": email}, {
-                    "$set": {"last_active": datetime.now(timezone.utc)}})
+                users.update_one(
+                    {"email": email}, 
+                    {"$set": {"last_active": datetime.now(timezone.utc)}})
+                
                 st.session_state.user = user
-                past_chats = list(chats.find(
-                    {"user_id": email}).sort("start_time", -1))
-
-                if past_chats:
-                    st.markdown("### 🧾 Your Previous Conversations")
-
-                    options = []
-                    for chat in past_chats:
-                        start_time_str = chat['start_time'].strftime(
-                            '%Y-%m-%d %H:%M'
-                        ) if chat.get('start_time') else "Unknown date"
-                        topic = get_chat_topic(chat.get("messages", []))
-                        option_label = (
-                            f"{start_time_str}| {chat['session_id']} | {topic}"
-                        )
-                        options.append(option_label)
-
-                    selected = st.selectbox(
-                        "Select a past conversation to load",
-                        options,
-                        index=0,
-                        key="session_selector"
-                    )
-
-                    if st.button("📂 Load Selected Chat"):
-                        selected_session_id = selected.split(" | ")[1]
-                        selected_chat = chats.find_one(
-                            {"session_id": selected_session_id})
-
-                        if selected_chat:
-                            st.session_state.session_id = selected_chat[
-                                "session_id"]
-                            st.session_state.chat_start_time = selected_chat[
-                                "start_time"]
-                            st.session_state.chat_history = selected_chat.get(
-                                "messages", [])
-                            logging.info(
-                                f"✅ Loaded session: {selected_session_id}")
-                            st.success(
-                                f"✅ Loaded session: {selected_session_id}")
-                            st.rerun()
-
-                # st.session_state.req_type = "Login"
-
-                if "session_id" not in st.session_state:
-                    st.session_state.session_id = generate_chat_id()
-                if "chat_start_time" not in st.session_state:
-                    st.session_state.chat_start_time = datetime.now(
-                        timezone.utc)
-                if "chat_history" not in st.session_state:
+                last_chat = chats.find_one({"user_id": email}, sort=[("start_time", -1)])
+                if last_chat:
+                    st.session_state.session_id = last_chat["session_id"]
+                    st.session_state.chat_start_time = last_chat.get("start_time")
+                    st.session_state.chat_history = last_chat.get("messages", [])
+                    st.session_state.chat_loaded_for_session = st.session_state.session_id
+                else:
+                    st.session_state.session_id = None
+                    st.session_state.chat_start_time = None
                     st.session_state.chat_history = []
 
-                chats.insert_one({
-                    "session_id": st.session_state.session_id,
-                    "user_id": email,
-                    "start_time": st.session_state.chat_start_time,
-                    "messages": []
-                })
                 logging.info("✅ Logged in!")
                 st.success("✅ Logged in!")
                 st.rerun()
             else:
-                logging.error("❌ Email not found. Please register.")
+                logging.warning("❌ Email not found. Please register.")
                 st.warning("❌ Email not found. Please register.")
 
     elif login_mode == "🎟️ Ticket ID":
         ticket_id = st.text_input("Enter your Ticket ID")
+
         if st.button("Resume via Ticket ID"):
             chat_data = chats.find_one({"session_id": ticket_id})
+
             if chat_data:
                 email = chat_data["user_id"]
                 user = users.find_one({"email": email})
 
-                st.session_state.user = user
-                st.session_state.session_id = ticket_id
-                st.session_state.chat_start_time = chat_data.get(
-                    "start_time", datetime.now(timezone.utc))
-                st.session_state.chat_history = chat_data.get("messages", [])
-                logging.info("✅ Session restored!")
-                st.success("✅ Session restored!")
-                st.rerun()
+                if user:
+                    st.session_state.user = user
+                    st.session_state.session_id = ticket_id
+                    st.session_state.chat_start_time = chat_data.get(
+                        "start_time", datetime.now(timezone.utc))
+                    st.session_state.chat_history = chat_data.get("messages", [])
+                    st.session_state.chat_loaded_for_session = ticket_id
+
+                    logging.info("✅ Session restored!")
+                    st.success("✅ Session restored!")
+                    st.rerun()
+                else:
+                    logging.error("❌ User for this ticket not found.")
+                    st.error("❌ User for this ticket not found.")
+
             else:
                 logging.error("❌ Invalid Ticket ID")
                 st.error("❌ Invalid Ticket ID")
 
     elif login_mode == "🆕 Start New Chat":
         register_form()
-
     else:
         register_form()
 else:
     user_details()
-
-    # if "greeting_shown" not in st.session_state:
-    #    greeting = find_default_answer("greeting")
-    #    ## greeting == "I don't understand that.":
-    #      #  greeting = "Hello! 👋 How can I assist you today?"
-    #    st.info(greeting)
-    #    st.session_state.greeting_shown = True
-
     chat_interface()
