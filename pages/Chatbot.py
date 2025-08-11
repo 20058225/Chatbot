@@ -1,11 +1,13 @@
 # pages/Chatbot.py
-
+# ======================
 import streamlit as st
 import yagmail
 import random
 import google.generativeai as genai
 import os
 from services.mongo import db
+from services.monitoring import log_user_interaction, log_error
+from services import ml as ml_services
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from numpy.linalg import norm
@@ -15,17 +17,15 @@ import numpy as np
 import torch
 import re
 from transformers import GPT2Tokenizer, GPT2LMHeadModel, BertTokenizer, BertModel
-import joblib
 import logging
 from difflib import SequenceMatcher
 
-from services import ml as ml_services
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s [%(levelname)s] %(message)s')
 logging.info("🔄️ Reloading Chatbot.py...")
 load_dotenv(dotenv_path="config/.env")
 
-# wrappers defensivos
 try:
     predict_sentiment = ml_services.predict_sentiment
     predict_priority = ml_services.predict_priority
@@ -55,10 +55,22 @@ faq = db["faq"]
 knowledge = db["knowledge"]
 unanswered = db["unanswered"]
 default_chat = db["default_chat"]
+monitoring_col = db["monitoring"]
+
+def log_event(event_type, details, status="success", source="production"):
+    """Registra um evento no MongoDB (coleção monitoring)."""
+    monitoring_col.insert_one({
+        "event": event_type,
+        "details": details,
+        "status": status,
+        "source": source,
+        "timestamp": datetime.now(timezone.utc)
+    })
+
 
 @st.cache_data
 def load_faq_df():
-    return pd.read_csv("data/tickets.csv")
+    return pd.read_csv("data/train_model.csv")
 
 
 @st.cache_resource(show_spinner=False)
@@ -196,23 +208,37 @@ def generate_bot_response(user_input):
     logging.info("👁️ Checking Patterns...")
     answer, tag = find_default_answer(user_input)
     if answer:
-        logging.info("✅ Matched Intent.")
+        log_event("chat_response", {
+            "user_input": user_input,
+            "predicted_source": "intent",
+            "predicted_tag": tag
+        }, source="production")
         return answer, tag or "intent"
 
     logging.info("👁️ Checking FAQ...")
     answer = find_known_answer(user_input)
     if answer:
-        logging.info("✅ Matched FAQ.")
+        log_event("chat_response", {
+            "user_input": user_input,
+            "predicted_source": "faq"
+        }, source="production")
         return answer, "faq"
 
     logging.info("👁️ Checking Knowledge Base...")
     answer = find_knowledge_answer(user_input)
     if answer:
-        logging.info("✅ Matched Knowledge.")
+        log_event("chat_response", {
+            "user_input": user_input,
+            "predicted_source": "kb"
+        }, source="production")
         return answer, "kb"
 
     logging.info("🤖 Calling AI model...")
     answer = get_ai_reply(user_input)
+    log_event("chat_response", {
+        "user_input": user_input,
+        "predicted_source": "ai"
+    }, source="production")
     return answer, "ai"
 
 

@@ -6,7 +6,7 @@ from sklearn.pipeline import Pipeline
 import joblib
 from joblib import load
 
-DATA_PATH = "data/tickets.csv"
+DATA_PATH = "data/train_model.csv"
 MODEL_PATH = "ml/models/sentiment_pipeline.joblib"
 
 try:
@@ -19,7 +19,7 @@ def classify_sentiment(text):
     if not text:
         return "neutral"
     if model is None:
-        raise RuntimeError("Modelo de sentimento não carregado")
+        raise RuntimeError("Unloaded sentiment model")
     pred = model.predict([text])[0]
     print(f"Classify sentiment input: {text} -> prediction: {pred}")
     return pred.lower()

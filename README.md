@@ -25,24 +25,54 @@ A Streamlit-based AI Chatbot application with support for sentiment and priority
 
 ## 📂 Project Structure
 ```
-.├── ml/
-│ └── models/
-│ ├── sentiment_pipeline.joblib
-│ └── priority_pipeline.joblib
-├── data/│ └── tickets.csv
+.
+├── ml/
+│   ├── models/
+│   │   ├── kmeans_model.joblib
+│   │   ├── priority_pipeline.joblib
+│   │   └── sentiment_pipeline.joblib
+│   ├── priority.py
+│   └── sentiment.py
+├── data/
+│   ├── questions.txt
+│   └── train_model.csv
 ├── pages/
-│ ├── Chatbot.py
-│ └── Dashboard.py
+│   ├── Chatbot.py
+│   └── Dashboard.py
 ├── services/
-│ └── utils.py
+│   ├── db.py
+│   ├── import_file.py
+│   ├── ml.py
+│   ├── mongo.py
+│   ├── monitoring.py
+│   └── utils.py
+├── simulation/
+│   ├── result/
+│   ├── script_bert.py
+│   └── simulate_chat_tests.py
+├── tests/
+│   ├── test_get_ai_reply.py
+│   ├── test_health.py
+│   ├── test_mongo.py
+│   ├── test_priority.py
+│   ├── test_sentiment.py
+│   └── test_services.py
+├── logs/
+│   └── chatbot-<timestamp>.log
 ├── config/
-│ └── .env
+│   └── .env
+├── assets/
+│   └── [images/screenshots]
+├── .github/
+│   └── workflows/
+│       └── chatbot-app.yml
 ├── Home.py
-├── start.sh
-├── requirements.txt
 ├── Dockerfile
-├── LICENSE
-└── README.md
+├── env.sh
+├── requirements.txt
+├── start.sh
+├── README.md
+└── .gitignore
 ```
 
 ---
@@ -109,7 +139,7 @@ Both loaded at startup by services/utils.py.
 
 ---
 
-## 🗃️ Sample Data Format (data/tickets.csv)
+## 🗃️ Sample Data Format (data/train_model.csv)
 
 This dataset is used to train and evaluate both ML pipelines:
 
@@ -120,7 +150,8 @@ This dataset is used to train and evaluate both ML pipelines:
 
 ### 🔍 Example rows:
 ```
-csvdescription,sentiment,priority
+.csv
+description,sentiment,priority
 "I can't log in to my account",negative,High
 "My computer is running slow",negative,Medium
 "How do I reset my email password?",neutral,Medium

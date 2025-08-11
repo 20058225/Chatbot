@@ -5,7 +5,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 import joblib
 
-DATA_PATH = "data/tickets.csv"
+DATA_PATH = "data/train_model.csv"
 MODEL_PATH = "ml/models/priority_pipeline.joblib"
 
 

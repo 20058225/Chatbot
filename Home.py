@@ -4,6 +4,7 @@ import streamlit as st
 from services.ml import load_priority_model, load_sentiment_model
 from dotenv import load_dotenv
 import joblib
+import pandas as pd
 import os
 
 load_dotenv("config/.env")

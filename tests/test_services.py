@@ -1,11 +1,10 @@
 # tests/test_services.py
 # ======================
-import pytest
 from services.db import append_message, update_message_feedback, find_known_answer, get_chats_collection
-from datetime import datetime
+from datetime import datetime, timezone
 
 def test_save_chat_message():
-    append_message("test_session", {"sender": "user", "text": "hello", "timestamp": datetime.utcnow()})
+    append_message("test_session", {"sender": "user", "text": "hello", "timestamp": datetime.now(timezone.utc)})
     chat = get_chats_collection().find_one({"session_id": "test_session"})
     assert any(msg["text"] == "hello" for msg in chat["messages"])
 

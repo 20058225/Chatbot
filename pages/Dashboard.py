@@ -1,3 +1,4 @@
+# pages/Dashboard.py
 import streamlit as st
 import pandas as pd
 from bson import ObjectId
@@ -7,7 +8,7 @@ import altair as alt
 
 from services.mongo import db
 from services.ml import train_and_save_models_from_csv, train_and_save_kmeans_from_csv
-from services.db import update_message_feedback  # Your existing update func
+from services.db import update_message_feedback 
 
 st.set_page_config(page_title="📊 Chatbot Dashboard", page_icon="👩‍💻", layout="wide")
 
@@ -21,40 +22,18 @@ st.title("📊 Chatbot Admin Dashboard")
 
 # Mongo collections
 chats = db["chats"]
+monitoring = db["monitoring"]
 unanswered = db["unanswered"]
 faq = db["faq"]
 default_chat = db["default_chat"]
 knowledge = db["knowledge"]
 
-# --- Upload CSV + Train Models ---
-st.subheader("📤 Upload CSV & Train Models")
 
-uploaded_file = st.file_uploader("Upload a CSV file to train the models", type=["csv"])
-if uploaded_file:
-    csv_path = DATA_DIR / uploaded_file.name
-    with open(csv_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    st.success(f"✅ CSV saved at `{csv_path}`")
 
-    df = pd.read_csv(csv_path)
-    st.dataframe(df.head())
-
-    if st.button("🚀 Train Models"):
-        with st.spinner("Training models..."):
-            try:
-                train_and_save_models_from_csv(csv_path)
-                train_and_save_kmeans_from_csv(csv_path)
-                st.success("✅ Models trained and saved in ml/models/")
-            except Exception as e:
-                st.error(f"Error training models: {e}")
-
-# --- Tabs for Management ---
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "📚 FAQs",
     "📄 Knowledge Articles",
-    "💬 Chat History & Feedback",
-    "🗄️ Quick MongoDB Chats Editor",
+    "💬 Chat History & Editor",
     "📊 User & Message Stats"
 ])
 
@@ -70,7 +49,7 @@ with tab1:
             new_q = st.text_input("Question")
             new_a = st.text_area("Answer")
             submitted = st.form_submit_button("Save New FAQ")
-            cancelled = st.form_submit_button("Save New FAQ")
+            cancelled = st.form_submit_button("Cancel")
 
             if submitted:
                 faq.insert_one({"question": new_q, "answer": new_a})
@@ -161,13 +140,13 @@ with tab2:
 
         col1, col2 = st.columns(2)
         with col1:
-            if st.button(f"✏️ Edit Article {article['_id']}", key=f"edit_article_{article['_id']}"):
+            if st.button(f"✏️ Edit Article", key=f"edit_article_{article['_id']}"):
                 st.session_state['editing_article_id'] = str(article['_id'])
                 st.session_state['editing_article_title'] = article.get('title', '')
                 st.session_state['editing_article_content'] = article.get('content', '')
                 st.rerun()
         with col2:
-            if st.button(f"🗑️ Delete Article {article['_id']}", key=f"delete_article_{article['_id']}"):
+            if st.button(f"🗑️ Delete Article", key=f"delete_article_{article['_id']}"):
                 knowledge.delete_one({"_id": article["_id"]})
                 st.success("Article deleted!")
                 st.rerun()
@@ -244,13 +223,12 @@ with tab3:
                     st.success("✅ Feedback updated!")
 
             st.markdown("---")
-
     else:
         st.info("No chat sessions found.")
 
-# === TAB 4: Quick MongoDB Chats Editor ===
-with tab4:
-    st.subheader("🗄️ Quick MongoDB Chats Editor")
+    st.markdown("---")
+
+    st.info("🗄️ Quick MongoDB Chats Editor")
 
     df_chats = pd.DataFrame(list(chats.find()))
     if not df_chats.empty:
@@ -276,21 +254,21 @@ with tab4:
                 st.warning("No document found with that _id.")
         except Exception as e:
             st.error(f"Invalid _id or error: {e}")
-
-# === TAB 5: User & Message Stats ===
-with tab5:        
+    
+# === TAB 4: User & Message Stats ===
+with tab4:        
     st.subheader("📊 User & Message Statistics")
 
     total_chats = chats.count_documents({})
     total_faqs = faq.count_documents({})
     total_knowledge = knowledge.count_documents({})
+    total_monitor_logs = monitoring.count_documents({})
 
     st.write(f"Total chat sessions: {total_chats}")
     st.write(f"Total FAQs: {total_faqs}")
     st.write(f"Total Knowledge Articles: {total_knowledge}")
+    st.write(f"Total Monitoring Logs: {total_monitor_logs}")
 
-    
-    # Example: Sentiment distribution
     pipeline = [
         {"$unwind": "$messages"},
         {"$group": {"_id": "$messages.sentiment", "count": {"$sum": 1}}}
@@ -308,4 +286,57 @@ with tab5:
     else:
         st.info("No sentiment data available.")
 
-    # You can add more stats similarly (priority, feedback, user message counts, etc.)
+    pipeline = [
+        {"$match": {"intent_tag": {"$exists": True}}},
+        {
+            "$group": {
+                "_id": None,
+                "avg_response_time": {"$avg": "$response_time"},
+                "fallback_count": {"$sum": {"$cond": ["$is_fallback", 1, 0]}},
+                "thumbs_up_count": {"$sum": {"$cond": ["$thumbs_up", 1, 0]}},
+                "thumbs_down_count": {"$sum": {"$cond": ["$thumbs_down", 1, 0]}},
+                "unique_users": {"$addToSet": "$user_id"},
+                "total_responses": {"$sum": 1},
+            }
+        }
+    ]
+
+    agg_result = list(monitoring.aggregate(pipeline))
+    if agg_result:
+        data = agg_result[0]
+        total_responses = data.get("total_responses", 1)
+        fallback_rate = data.get("fallback_count", 0) / total_responses
+        thumbs_up = data.get("thumbs_up_count", 0)
+        thumbs_down = data.get("thumbs_down_count", 0)
+        total_feedback = thumbs_up + thumbs_down
+        satisfaction = ((thumbs_up - thumbs_down) / total_feedback) if total_feedback > 0 else 0
+        unique_users = len(data.get("unique_users", []))
+        avg_response_time = data.get("avg_response_time", 0)
+
+        st.write(f"Total AI Responses Logged: {total_responses}")
+        st.write(f"Unique Users Interacted: {unique_users}")
+        st.write(f"Average AI Response Time: {avg_response_time:.3f} seconds")
+        st.write(f"Fallback Rate: {fallback_rate:.2%}")
+        st.write(f"Satisfaction Score (thumbs up minus down): {satisfaction:.2f}")
+
+    else:
+        st.info("No monitoring logs found with intent tags.")
+
+    # --- Error count ---
+    error_count = monitoring.count_documents({"error_type": {"$exists": True}})
+    st.write(f"Total Logged Errors: {error_count}")
+
+    if agg_result:
+        df_feedback = pd.DataFrame({
+            "Feedback": ["Thumbs Up", "Thumbs Down"],
+            "Count": [thumbs_up, thumbs_down]
+        })
+
+        chart = alt.Chart(df_feedback).mark_bar().encode(
+            x='Feedback',
+            y='Count',
+            color='Feedback'
+        ).properties(title="Feedback Distribution")
+
+        st.altair_chart(chart, use_container_width=True)
+
