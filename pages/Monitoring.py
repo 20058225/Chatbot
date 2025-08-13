@@ -1,16 +1,18 @@
 # pages/Monitoring.py
 import streamlit as st
 import altair as alt
-import io
+import time
 import pandas as pd
 from pathlib import Path
 from datetime import datetime, timezone
 import logging
 import os
 import csv
+import plotly.express as px
 from simulation.simulate_chat_tests import run_tests
 from pathlib import Path
 from services.mongo import db
+from services.monitoring import load_logs
 from services.ml import train_and_save_models_from_csv, train_and_save_kmeans_from_csv
 
 LOG_DIR = "logs"
@@ -23,7 +25,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-st.set_page_config(page_title="📈 Monitoring & Tests", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Monitoring & Tests", page_icon="📊", layout="wide")
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -36,12 +38,13 @@ st.title("📈 Monitoring & Automated Tests")
 # MongoDB collections
 monitoring_col = db["monitoring"]
 test_results_col = db["test_results"]
-chat_logs_test_col = db["chat_logs_test"]
 
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📚 Train Models",
     "🔍 Monitoring Logs",
-    "🧪 Test Results" 
+    "🧪 Test Results",
+    "Execution Metrics", 
+    "Monitoring Logs"
 ])
 
 # --- TAB 1: Train Models ---
@@ -49,16 +52,40 @@ with tab1:
     st.subheader("📤 Upload CSV & Train Models")
 
     uploaded_file = st.file_uploader("Upload a CSV file to train the models", type=["csv"])
+
     if uploaded_file:
         csv_path = DATA_DIR / uploaded_file.name
         with open(csv_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
-        st.success(f"✅ CSV saved at `{csv_path}`")
+        success_box1 = st.success(f"✅ CSV saved at `{csv_path}`")
+        time.sleep(5)
+        success_box1.empty()
 
         df = pd.read_csv(csv_path)
         st.dataframe(df.head())
 
+        total = len(df)
+        info_box1 = st.info(f"📊 The file contains **{total} lines** that will be processed.")
+
+
         if st.button("🚀 Train Models"):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            for i in range(total):
+                time.sleep(0.5)  # Simula processamento
+                pct = int(((i + 1) / total) * 100)
+                progress_bar.progress(pct)
+                status_text.text(f"Processing step {i+1}/{total} ({pct}%)")
+            # ✅ Finalizou
+            progress_bar.empty()   # 🔹 Remove a barra
+            status_text.empty()    # 🔹 Remove o texto
+            info_box1.empty()
+
+            success_box2 = st.success("✅ Processing completed!")
+            time.sleep(3)
+            success_box2.empty()
+
             with st.spinner("Training models..."):
                 try:
                     train_and_save_models_from_csv(csv_path)
@@ -70,7 +97,9 @@ with tab1:
                         "status": "success",
                         "log_source": "production"
                     })
-                    st.success("✅ Models trained and saved in ml/models/")
+                    success_box3 = st.success("✅ Models trained and saved in ml/models/")
+                    time.sleep(3)
+                    success_box3.empty()
                 except Exception as e:
                     monitoring_col.insert_one({
                         "event": "train_models",
@@ -80,7 +109,7 @@ with tab1:
                         "error": str(e),
                         "log_source": "production"
                     })
-                    st.error(f"Error training models: {e}")
+                    st.error(f"❌ Error training models: {e}")
 
 # --- TAB 2: Monitoring Logs ---
 with tab2:  
@@ -88,8 +117,7 @@ with tab2:
 
     collections = {
         "Monitoring (prod)": "monitoring",
-        "Test Results (simulation)": "test_results",
-        "Chat Logs Test (simulation)": "chat_logs_test"
+        "Test Results (simulation)": "test_results"
     }
     selected_collection_label = st.selectbox(
         "📂 Select the Collection",
@@ -98,15 +126,15 @@ with tab2:
     )
     selected_collection = db[collections[selected_collection_label]]
 
-    col_a, col_b, col_c, col_d = st.columns([1, 1, 1, 1])
-    with col_a:
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+    with col1:
         user_filter = st.text_input("Filter by user_id (regex)")
-    with col_b:
+    with col2:
         model_filter = st.text_input("Filter by model (exact)")
-    with col_c:
+    with col3:
         date_from = st.date_input("From", value=None)
         date_to = st.date_input("To", value=None)
-    with col_d:
+    with col4:
         log_source_filter = st.selectbox(
             "Source", options=["All", "production", "simulation"], index=0)
 
@@ -152,12 +180,39 @@ with tab3:
     uploaded_questions = st.file_uploader("📤 Upload question file (.txt) to run the test", type=["txt"])
 
     if uploaded_questions and st.button("🚀 Run Tests"):
+
         questions_path = Path("data") / uploaded_questions.name
         with open(questions_path, "wb") as f:
             f.write(uploaded_questions.getvalue())
 
+        with open(questions_path, "r", encoding="utf-8") as f:
+            questions_list = [line.strip() for line in f if line.strip()]
+
+        total = len(questions_list)
+        info_box2 = st.info(f"📊 The file contains **{total} lines** that will be processed.")
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        for i, q in enumerate(questions_list):
+            # Aqui vai sua lógica de teste por pergunta
+            time.sleep(0.5)  # Simula tempo de processamento
+            pct = int((i + 1) / total * 100)
+            progress_bar.progress(pct)
+            status_text.text(f"Processing step {i+1}/{total} ({pct}%)")
+
+        progress_bar.empty()   # 🔹 Remove a barra
+        status_text.empty()    # 🔹 Remove o texto
+        info_box2.empty()
+
+        success_box4 = st.success("✅ Processing completed!")
+        time.sleep(3)
+        success_box4.empty()
+
         results = run_tests(str(questions_path))
-        st.success("✅ Tests performed!")
+        success_box5 = st.success("✅ Tests performed!")
+        time.sleep(3)
+        success_box5.empty()
 
         df_up = pd.DataFrame(results)
         if "_id" in df_up.columns:
@@ -185,55 +240,147 @@ with tab3:
             df["timestamp"] = pd.to_datetime(df["timestamp"])
         st.dataframe(df)
 
-# --- Resumo de métricas ---
-        st.markdown("### 📊 Summary Metrics")
+    st.markdown("---")
 
-        avg_gpt2_time = df["gpt2_time"].mean()
-        avg_bert_time = df["bert_time"].mean()
+# --- Resumo de métricas ---
+    st.markdown("### 📊 Summary Metrics")
+
+    if "execution_time" in df.columns and "model" in df.columns:
+        avg_gpt2_time = df.loc[df["model"] == "gpt-2", "execution_time"].mean()
+        avg_bert_time = df.loc[df["model"] == "bert", "execution_time"].mean()
         st.write(f"Average GPT-2 Response Time: {avg_gpt2_time:.3f} seconds")
         st.write(f"Average BERT Response Time: {avg_bert_time:.3f} seconds")
 
-        # Se existir coluna de "correct" ou similar, calcule acurácia média (exemplo)
-        if "correct" in df.columns and df["correct"].dtype in [bool, int, float]:
-            accuracy = df["correct"].mean()
-            st.write(f"Overall Accuracy: {accuracy:.2%}")
+    # Se existir coluna de "correct" ou similar, calcule acurácia média (exemplo)
+    if "correct" in df.columns and df["correct"].dtype in [bool, int, float]:
+        accuracy = df["correct"].mean()
+        st.write(f"Overall Accuracy: {accuracy:.2%}")
 
-        # --- Gráfico 1: Boxplot dos tempos por modelo ---
-        chart_response_time = alt.Chart(df).mark_boxplot().encode(
+    # --- Gráfico 1: Boxplot dos tempos por modelo ---
+    chart_response_time = alt.Chart(
+        df[df["model"] == "gpt-2"]
+    ).mark_boxplot().encode(
+        x=alt.X("model:N", title="Model"),
+        y=alt.Y("execution_time:Q", title="GPT-2 Response Time (s)"),
+        color="model:N"
+    ).properties(
+        title="GPT-2 Response Time Distribution"
+    )
+    st.altair_chart(chart_response_time, use_container_width=True)
+
+    chart_bert_time = alt.Chart(
+        df[df["model"] == "bert"]
+    ).mark_boxplot().encode(
+        x=alt.X("model:N", title="Model"),
+        y=alt.Y("execution_time:Q", title="BERT Response Time (s)"),
+        color="model:N"
+    ).properties(
+        title="BERT Response Time Distribution"
+    )
+    st.altair_chart(chart_bert_time, use_container_width=True)
+
+    # --- Gráfico 2: Acurácia média por modelo (se disponível) ---
+    if "correct" in df.columns and df["correct"].dtype in [bool, int, float]:
+        df_acc = df.groupby("model")["correct"].mean().reset_index()
+        chart_accuracy = alt.Chart(df_acc).mark_bar().encode(
             x=alt.X("model:N", title="Model"),
-            y=alt.Y("gpt2_time:Q", title="GPT-2 Response Time (s)"),
+            y=alt.Y("correct:Q", title="Accuracy"),
             color="model:N"
-        ).properties(
-            title="GPT-2 Response Time Distribution"
-        )
-        st.altair_chart(chart_response_time, use_container_width=True)
+        ).properties(title="Accuracy by Model")
+        st.altair_chart(chart_accuracy, use_container_width=True)
 
-        chart_bert_time = alt.Chart(df).mark_boxplot().encode(
-            x=alt.X("model:N", title="Model"),
-            y=alt.Y("bert_time:Q", title="BERT Response Time (s)"),
-            color="model:N"
-        ).properties(
-            title="BERT Response Time Distribution"
-        )
-        st.altair_chart(chart_bert_time, use_container_width=True)
+    # Botão para apagar resultados
+    confirm_delete = st.checkbox("Are you sure you want to delete ALL test results?")
+    if confirm_delete and st.button("🗑️ Confirm Delete All Test Results"):
+        res = test_results_col.delete_many(query)
+        success_box6 = st.success(f"Deleted {res.deleted_count} test result documents.")
+        time.sleep(2)
+        success_box6.empty()
+        st.rerun()
+    # else:
+      # st.info("No test results found in the database.")
 
-        # --- Gráfico 2: Acurácia média por modelo (se disponível) ---
-        if "correct" in df.columns and df["correct"].dtype in [bool, int, float]:
-            df_acc = df.groupby("model")["correct"].mean().reset_index()
-            chart_accuracy = alt.Chart(df_acc).mark_bar().encode(
-                x=alt.X("model:N", title="Model"),
-                y=alt.Y("correct:Q", title="Accuracy"),
-                color="model:N"
-            ).properties(title="Accuracy by Model")
-            st.altair_chart(chart_accuracy, use_container_width=True)
 
-        # Botão para apagar resultados
-        confirm_delete = st.checkbox("Are you sure you want to delete ALL test results?")
-        if confirm_delete and st.button("🗑️ Confirm Delete All Test Results"):
-            res = test_results_col.delete_many(query)
-            st.success(f"Deleted {res.deleted_count} test result documents.")
-            st.rerun()
+##### -----
+with tab4:
+    st.subheader("Execution Metrics Overview")
+    log_type = st.selectbox("Select log type:", ["all", "train", "test"])
+    df = load_logs(log_type)
+
+    if not df.empty:
+        if "execution_time" in df.columns and "model" in df.columns:
+            avg_gpt2_time = df.loc[df["model"] == "gpt-2", "execution_time"].mean()
+            avg_bert_time = df.loc[df["model"] == "bert", "execution_time"].mean()
+
+            st.write(f"Average GPT-2 Response Time: {avg_gpt2_time:.3f} seconds")
+            st.write(f"Average BERT Response Time: {avg_bert_time:.3f} seconds")
     else:
-        st.info("No test results found in the database.")
+        st.warning("No logs found for the selected type.")
 
+    st.markdown("---")
+
+    st.subheader("Comparative Charts")
+    log_type = st.selectbox("Select log type for charts:", ["all"])
     
+    df_all = load_logs(log_type)
+    if df_all.empty:
+        st.warning("No data for charts.")
+    else:
+        # 🔹 Conversão de ObjectId para string para evitar erro no Streamlit/PyArrow
+        import bson
+        # 🔹 Garantir conversão de timestamp para datetime (se existir)
+        if "timestamp" in df_all.columns:
+            try:
+                df_all["timestamp"] = pd.to_datetime(df_all["timestamp"])
+            except Exception:
+                pass
+
+        # === MÉDIA DE TEMPO POR MODELO ===
+        if "execution_time" in df_all.columns and df_all["execution_time"].notna().any():
+            avg_time = df_all.groupby("model")["execution_time"].mean().reset_index()
+            fig_time = px.bar(
+                avg_time,
+                x="model",
+                y="execution_time",
+                title="Average Execution Time per Model"
+            )
+            st.plotly_chart(fig_time, use_container_width=True)
+        else:
+            st.info("⚠️ No 'execution_time' data available for chart.")
+
+        # === MÉDIA DE SCORE POR MODELO ===
+        if "score" in df_all.columns and df_all["score"].notna().any():
+            avg_score = df_all.groupby("model")["score"].mean().reset_index()
+            fig_score = px.bar(
+                avg_score,
+                x="model",
+                y="score",
+                title="Average Score per Model"
+            )
+            st.plotly_chart(fig_score, use_container_width=True)
+        else:
+            st.info("⚠️ No 'score' data available for chart.")
+
+        # === EVOLUÇÃO TEMPORAL DO TEMPO DE EXECUÇÃO ===
+        if "execution_time" in df_all.columns and "timestamp" in df_all.columns:
+            fig_line = px.line(
+                df_all.dropna(subset=["execution_time"]),
+                x="timestamp",
+                y="execution_time",
+                color="model",
+                title="Execution Time Over Runs"
+            )
+            st.plotly_chart(fig_line, use_container_width=True)
+        else:
+            st.info("⚠️ Missing columns for execution time over time chart.")
+
+
+with tab5:
+    st.subheader("Monitoring Logs")
+    log_type = st.selectbox("Select log type for details:", ["all","train", "test"], key="logs_tab2")
+    df_logs = load_logs(log_type)
+
+    if not df_logs.empty:
+        st.dataframe(df_logs)
+    else:
+        st.warning("No detailed logs found.")

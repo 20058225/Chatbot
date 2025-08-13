@@ -1,6 +1,6 @@
-import pytest
+# tests/test_get_ai_reply.py
+# ======================
 from unittest.mock import patch, MagicMock
-from pages.Chatbot import get_ai_reply 
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -15,6 +15,7 @@ def test_get_ai_reply_mocked(
     mock_find_one,
     mock_faq_find
 ):
+    from pages.Chatbot import get_ai_reply 
     # 📚 Mock the MongoDB context data
     mock_faq_find.return_value.limit.return_value = [
         {"question": "How to reset password?", "answer": "Click on forgot password"},

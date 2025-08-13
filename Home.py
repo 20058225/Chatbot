@@ -51,6 +51,7 @@ st.markdown("""
 
 st.page_link("pages/Chatbot.py", label="Chat with the AI Assistant", icon="🧠")
 st.page_link("pages/Dashboard.py", label="View Dashboard & Analytics", icon="📊")
+st.page_link("pages/Monitoring.py", label="Monitoring & Tests", icon="📈")
 
 st.markdown("---")
 st.subheader("📌 Project Overview")

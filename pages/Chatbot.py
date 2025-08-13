@@ -6,7 +6,6 @@ import random
 import google.generativeai as genai
 import os
 from services.mongo import db
-from services.monitoring import log_user_interaction, log_error
 from services import ml as ml_services
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -57,13 +56,13 @@ unanswered = db["unanswered"]
 default_chat = db["default_chat"]
 monitoring_col = db["monitoring"]
 
-def log_event(event_type, details, status="success", source="production"):
+def log_event(event_type, details, status="success", log_source="production"):
     """Registra um evento no MongoDB (coleção monitoring)."""
     monitoring_col.insert_one({
         "event": event_type,
         "details": details,
         "status": status,
-        "source": source,
+        "log_source": log_source,
         "timestamp": datetime.now(timezone.utc)
     })
 
@@ -127,7 +126,7 @@ def predict_priority_with_text(text):
         return "Low"
 
 
-st.set_page_config(page_title="Chatbot", page_icon="🤖")
+st.set_page_config(page_title="Chatbot", page_icon="🤖", layout="wide")
 
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -212,7 +211,7 @@ def generate_bot_response(user_input):
             "user_input": user_input,
             "predicted_source": "intent",
             "predicted_tag": tag
-        }, source="production")
+        }, log_source="production")
         return answer, tag or "intent"
 
     logging.info("👁️ Checking FAQ...")
@@ -221,7 +220,7 @@ def generate_bot_response(user_input):
         log_event("chat_response", {
             "user_input": user_input,
             "predicted_source": "faq"
-        }, source="production")
+        }, log_source="production")
         return answer, "faq"
 
     logging.info("👁️ Checking Knowledge Base...")
@@ -230,7 +229,7 @@ def generate_bot_response(user_input):
         log_event("chat_response", {
             "user_input": user_input,
             "predicted_source": "kb"
-        }, source="production")
+        }, log_source="production")
         return answer, "kb"
 
     logging.info("🤖 Calling AI model...")
@@ -238,7 +237,7 @@ def generate_bot_response(user_input):
     log_event("chat_response", {
         "user_input": user_input,
         "predicted_source": "ai"
-    }, source="production")
+    }, log_source="production")
     return answer, "ai"
 
 
@@ -520,26 +519,28 @@ def user_details():
             st.session_state.chat_loaded_for_session = session_id
             st.success(f"✅ Loaded chat session {session_id}!")
 
-
-    def conversation_load():
-        st.sidebar.markdown("### Select a conversation to load")
+    with st.sidebar.expander("🧾 Previous Chats"):
         for idx, msg in enumerate(past_chats, start=1):
             session_id = msg.get("session_id")
             start_time = msg.get("start_time")
             messages = msg.get("messages", [])
             topic = get_chat_topic(messages)
-            display_time = start_time.strftime("%Y-%m-%d %H:%M") if start_time else "Unknown date"
-            button_label = f"📂 {idx} | {topic}\n{display_time}"
 
-            st.sidebar.button(
-                button_label,
-                key=f"load_{session_id}_{idx}",
-                on_click=load_chat,
-                args=(session_id,))
-    
+            # Garantir que start_time é datetime
+            if isinstance(start_time, str):
+                try:
+                    start_time = datetime.fromisoformat(start_time)
+                except:
+                    start_time = None
 
-    with st.sidebar.expander("🧾 Previous Chats"):
-        conversation_load()
+            display_time = start_time.strftime("%Y-%m-%d %H:%M") if isinstance(start_time, datetime) else "Unknown date"
+
+            # Botão: uso de label simples e dados extras como legenda
+            if st.button(f"📂 {idx} | {topic}", key=f"load_{session_id}_{idx}"):
+                load_chat(session_id)
+
+            st.caption(f"🕒 {display_time}")
+
 
     if st.session_state.get("chat_loaded_success"):
         st.success(f"✅ Chat loaded successfully!")
@@ -577,7 +578,7 @@ def chat_interface():
                 bot_time_str = str(bot_time)
             st.markdown(f"🤖 **Bot** ({bot_time_str}): {msg.get('answer')}")
 
-            col1, col2 = st.columns(2)
+            col1, col2 = st.columns([1,1])
             with col1:
                 if st.button("👍", key=f"thumbsup_{idx}"):
                     handle_feedback(st.session_state.user, msg["question"], msg["answer"],

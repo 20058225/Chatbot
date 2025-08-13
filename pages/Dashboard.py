@@ -187,7 +187,8 @@ with tab3:
         query = {
             "$or": [
                 {"user_id": {"$regex": search_term, "$options": "i"}},
-                {"messages.text": {"$regex": search_term, "$options": "i"}},
+                {"messages.question": {"$regex": search_term, "$options": "i"}},
+                {"messages.answer": {"$regex": search_term, "$options": "i"}}
             ]
         }
 
@@ -201,38 +202,43 @@ with tab3:
             start_time = chat.get("start_time")
             readable_time = start_time.strftime('%Y-%m-%d %H:%M:%S') if isinstance(start_time, datetime) else "unknown"
 
-            st.markdown(f"### 👤 User: `{user_id}` | 🏷️ Session: `{session_id}` | 📅 Started: {readable_time}")
+            with st.expander(f"👤 User: `{user_id}` | 🏷️ Session: `{session_id}` | 📅 Started: {readable_time}"):
 
-            for i, msg in enumerate(messages):
-                sender = msg.get("sender", "N/A")
-                text = msg.get("text", "N/A")
-                timestamp = msg.get("timestamp")
-                ts_str = timestamp.strftime('%Y-%m-%d %H:%M:%S') if isinstance(timestamp, datetime) else str(timestamp)
-                feedback = msg.get("feedback", "")
+                for msg in messages:
+                    # Detecta sender e texto sem depender do campo sender
+                    if msg.get("question"):
+                        sender = "User"
+                        text = msg["question"]
+                    elif msg.get("answer"):
+                        sender = "Bot"
+                        text = msg["answer"]
+                    else:
+                        sender = "Unknown"
+                        text = msg.get("text", "")
 
-                st.write(f"**{sender}:** {text}  _(at {ts_str})_")
+                    # Feedback baseado nos booleans atuais
+                    if msg.get("thumbs_up"):
+                        feedback = "positivo"
+                    elif msg.get("thumbs_down"):
+                        feedback = "negativo"
+                    else:
+                        feedback = ""
 
-                new_feedback = st.selectbox(
-                    "Feedback",
-                    options=["", "positivo", "negativo"],
-                    index=["", "positivo", "negativo"].index(feedback) if feedback in ["positivo", "negativo"] else 0,
-                    key=f"feedback_{chat['_id']}_{i}"
-                )
-                if new_feedback != feedback:
-                    update_message_feedback(chat["_id"], i, new_feedback)
-                    st.success("✅ Feedback updated!")
+                    timestamp = msg.get("timestamp")
+                    ts_str = timestamp.strftime('%Y-%m-%d %H:%M:%S') if isinstance(timestamp, datetime) else str(timestamp)
 
-            st.markdown("---")
+                    st.write(f"**{sender}:** {text}  _(at {ts_str})_")
+                    # st.write(f"**{sender}:** {text}  _(at {ts_str})_  — Feedback: {feedback}")
+
     else:
         st.info("No chat sessions found.")
 
     st.markdown("---")
-
     st.info("🗄️ Quick MongoDB Chats Editor")
 
     df_chats = pd.DataFrame(list(chats.find()))
     if not df_chats.empty:
-        df_chats["_id"] = df_chats["_id"].astype(str)  # Convert ObjectId to str for editing
+        df_chats["_id"] = df_chats["_id"].astype(str)
         edited_df = st.data_editor(df_chats, num_rows="dynamic")
 
         if st.button("💾 Save changes"):
@@ -242,7 +248,6 @@ with tab3:
                 chats.update_one({"_id": doc_id}, {"$set": updated_doc})
             st.success("Chats collection updated!")
 
-    # --- Delete a chat document by _id ---
     delete_id = st.text_input("Delete chat by _id (paste ObjectId here):")
     if st.button("Delete document"):
         try:
@@ -254,7 +259,8 @@ with tab3:
                 st.warning("No document found with that _id.")
         except Exception as e:
             st.error(f"Invalid _id or error: {e}")
-    
+
+
 # === TAB 4: User & Message Stats ===
 with tab4:        
     st.subheader("📊 User & Message Statistics")
@@ -262,18 +268,20 @@ with tab4:
     total_chats = chats.count_documents({})
     total_faqs = faq.count_documents({})
     total_knowledge = knowledge.count_documents({})
-    total_monitor_logs = monitoring.count_documents({})
 
     st.write(f"Total chat sessions: {total_chats}")
     st.write(f"Total FAQs: {total_faqs}")
     st.write(f"Total Knowledge Articles: {total_knowledge}")
-    st.write(f"Total Monitoring Logs: {total_monitor_logs}")
 
-    pipeline = [
+    st.markdown("---")
+
+    # 🔹 Estatísticas de sentimento a partir de chats.messages
+    pipeline_sentiment = [
         {"$unwind": "$messages"},
+        {"$match": {"messages.sentiment": {"$exists": True}}},
         {"$group": {"_id": "$messages.sentiment", "count": {"$sum": 1}}}
     ]
-    sentiment_counts = list(chats.aggregate(pipeline))
+    sentiment_counts = list(chats.aggregate(pipeline_sentiment))
     df_sentiment = pd.DataFrame(sentiment_counts).rename(columns={"_id": "Sentiment", "count": "Count"})
 
     if not df_sentiment.empty:
@@ -286,22 +294,24 @@ with tab4:
     else:
         st.info("No sentiment data available.")
 
-    pipeline = [
-        {"$match": {"intent_tag": {"$exists": True}}},
+    # 🔹 Estatísticas de intent_tag e feedback a partir de chats.messages
+    pipeline_intents = [
+        {"$unwind": "$messages"},
+        {"$match": {"messages.intent_tag": {"$exists": True}}},
         {
             "$group": {
                 "_id": None,
-                "avg_response_time": {"$avg": "$response_time"},
-                "fallback_count": {"$sum": {"$cond": ["$is_fallback", 1, 0]}},
-                "thumbs_up_count": {"$sum": {"$cond": ["$thumbs_up", 1, 0]}},
-                "thumbs_down_count": {"$sum": {"$cond": ["$thumbs_down", 1, 0]}},
+                "avg_response_time": {"$avg": "$messages.bot_time"},
+                "fallback_count": {"$sum": {"$cond": ["$messages.is_fallback", 1, 0]}},
+                "thumbs_up_count": {"$sum": {"$cond": ["$messages.thumbs_up", 1, 0]}},
+                "thumbs_down_count": {"$sum": {"$cond": ["$messages.thumbs_down", 1, 0]}},
                 "unique_users": {"$addToSet": "$user_id"},
-                "total_responses": {"$sum": 1},
+                "total_responses": {"$sum": 1}
             }
         }
     ]
+    agg_result = list(chats.aggregate(pipeline_intents))
 
-    agg_result = list(monitoring.aggregate(pipeline))
     if agg_result:
         data = agg_result[0]
         total_responses = data.get("total_responses", 1)
@@ -311,7 +321,7 @@ with tab4:
         total_feedback = thumbs_up + thumbs_down
         satisfaction = ((thumbs_up - thumbs_down) / total_feedback) if total_feedback > 0 else 0
         unique_users = len(data.get("unique_users", []))
-        avg_response_time = data.get("avg_response_time", 0)
+        avg_response_time = data.get("avg_response_time") or 0
 
         st.write(f"Total AI Responses Logged: {total_responses}")
         st.write(f"Unique Users Interacted: {unique_users}")
@@ -319,24 +329,15 @@ with tab4:
         st.write(f"Fallback Rate: {fallback_rate:.2%}")
         st.write(f"Satisfaction Score (thumbs up minus down): {satisfaction:.2f}")
 
-    else:
-        st.info("No monitoring logs found with intent tags.")
-
-    # --- Error count ---
-    error_count = monitoring.count_documents({"error_type": {"$exists": True}})
-    st.write(f"Total Logged Errors: {error_count}")
-
-    if agg_result:
         df_feedback = pd.DataFrame({
             "Feedback": ["Thumbs Up", "Thumbs Down"],
             "Count": [thumbs_up, thumbs_down]
         })
-
         chart = alt.Chart(df_feedback).mark_bar().encode(
             x='Feedback',
             y='Count',
             color='Feedback'
         ).properties(title="Feedback Distribution")
-
         st.altair_chart(chart, use_container_width=True)
-
+    else:
+        st.info("No records with intent tags found in chat messages.")
