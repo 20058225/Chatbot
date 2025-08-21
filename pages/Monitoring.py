@@ -1,4 +1,6 @@
 # pages/Monitoring.py
+# =====================
+
 import streamlit as st
 import altair as alt
 import time
@@ -9,11 +11,17 @@ import logging
 import os
 import csv
 import plotly.express as px
-from simulation.simulate_chat_tests import run_tests
 from pathlib import Path
+from sklearn.linear_model import LogisticRegression
 from services.mongo import db
+from datasets import load_dataset
 from services.monitoring import load_logs
+from simulation.simulate_chat_tests import run_tests
 from services.ml import train_and_save_models_from_csv, train_and_save_kmeans_from_csv
+from services.embeddings import get_bert_embeddings, get_gpt2_embeddings, get_sbert_embeddings
+from sklearn.model_selection import train_test_split
+from services.db import save_embedding_evaluation_results
+from services.evaluation import run_full_evaluation
 
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -32,6 +40,44 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 MODELS_DIR = Path("ml/models")
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+def show_summary_metrics(df):
+    """Exibe métricas resumidas (tempo, score, etc.) para cada modelo."""
+    if "execution_time" in df.columns and "model" in df.columns:
+        avg_gpt2_time = df.loc[df["model"] == "gpt-2", "execution_time"].mean() or 0
+        avg_bert_time = df.loc[df["model"] == "bert", "execution_time"].mean() or 0
+        st.write(f"Average GPT-2 Response Time: {avg_gpt2_time:.3f} seconds")
+        st.write(f"Average BERT Response Time: {avg_bert_time:.3f} seconds")
+
+    if "score" in df.columns and "model" in df.columns:
+        avg_gpt2_score = df.loc[df["model"] == "gpt-2", "score"].mean() or 0
+        avg_bert_score = df.loc[df["model"] == "bert", "score"].mean() or 0
+        st.write(f"Average GPT-2 Score: {avg_gpt2_score:.3f}")
+        st.write(f"Average BERT Score: {avg_bert_score:.3f}")
+
+"""
+# Prepare seu dataset (X_train, y_train, X_test, y_test, texts)
+dataset = {
+    "X_train": [...],  # textos treino
+    "y_train": [...],  # labels treino
+    "X_test": [...],   # textos teste
+    "y_test": [...],   # labels teste
+    "texts": [...]     # textos completos para clusterização
+}
+
+embed_fns = {
+    "BERT": get_bert_embeddings,
+    "GPT-2": get_gpt2_embeddings,
+    "SBERT": get_sbert_embeddings
+}
+
+classifier = LogisticRegression(max_iter=1000)
+
+results = run_full_evaluation(embed_fns, dataset, classifier=classifier, n_clusters=8)
+
+print(results)  # Exibe os resultados detalhados por modelo
+
+"""
 
 st.title("📈 Monitoring & Automated Tests")
 
@@ -244,12 +290,7 @@ with tab3:
 
 # --- Resumo de métricas ---
     st.markdown("### 📊 Summary Metrics")
-
-    if "execution_time" in df.columns and "model" in df.columns:
-        avg_gpt2_time = df.loc[df["model"] == "gpt-2", "execution_time"].mean()
-        avg_bert_time = df.loc[df["model"] == "bert", "execution_time"].mean()
-        st.write(f"Average GPT-2 Response Time: {avg_gpt2_time:.3f} seconds")
-        st.write(f"Average BERT Response Time: {avg_bert_time:.3f} seconds")
+    show_summary_metrics(df)
 
     # Se existir coluna de "correct" ou similar, calcule acurácia média (exemplo)
     if "correct" in df.columns and df["correct"].dtype in [bool, int, float]:
@@ -257,14 +298,12 @@ with tab3:
         st.write(f"Overall Accuracy: {accuracy:.2%}")
 
     # --- Gráfico 1: Boxplot dos tempos por modelo ---
-    chart_response_time = alt.Chart(
-        df[df["model"] == "gpt-2"]
-    ).mark_boxplot().encode(
+    chart_response_time = alt.Chart(df).mark_boxplot().encode(
         x=alt.X("model:N", title="Model"),
         y=alt.Y("execution_time:Q", title="GPT-2 Response Time (s)"),
         color="model:N"
     ).properties(
-        title="GPT-2 Response Time Distribution"
+        title="Response Time Distribution per Model"
     )
     st.altair_chart(chart_response_time, use_container_width=True)
 
@@ -308,79 +347,59 @@ with tab4:
     df = load_logs(log_type)
 
     if not df.empty:
-        if "execution_time" in df.columns and "model" in df.columns:
-            avg_gpt2_time = df.loc[df["model"] == "gpt-2", "execution_time"].mean()
-            avg_bert_time = df.loc[df["model"] == "bert", "execution_time"].mean()
-
-            st.write(f"Average GPT-2 Response Time: {avg_gpt2_time:.3f} seconds")
-            st.write(f"Average BERT Response Time: {avg_bert_time:.3f} seconds")
+        st.dataframe(df)
+        st.markdown("### 📊 Summary Metrics")
+        show_summary_metrics(df)
     else:
         st.warning("No logs found for the selected type.")
 
     st.markdown("---")
+st.subheader("📊 Embeddings Evaluation (On-demand)")
 
-    st.subheader("Comparative Charts")
-    log_type = st.selectbox("Select log type for charts:", ["all"])
-    
-    df_all = load_logs(log_type)
-    if df_all.empty:
-        st.warning("No data for charts.")
-    else:
-        # 🔹 Conversão de ObjectId para string para evitar erro no Streamlit/PyArrow
-        import bson
-        # 🔹 Garantir conversão de timestamp para datetime (se existir)
-        if "timestamp" in df_all.columns:
-            try:
-                df_all["timestamp"] = pd.to_datetime(df_all["timestamp"])
-            except Exception:
-                pass
+if st.button("🚀 Run Embedding Evaluation on HuggingFace Dataset"):
+    with st.spinner("Baixando e processando dataset..."):
+        # 🔹 Carregar dataset do Hugging Face
+        dataset_hf = load_dataset("Tobi-Bueck/customer-support-tickets")
+        df_eval = pd.DataFrame(dataset_hf["train"])[["ticket_text", "category"]].dropna()
 
-        # === MÉDIA DE TEMPO POR MODELO ===
-        if "execution_time" in df_all.columns and df_all["execution_time"].notna().any():
-            avg_time = df_all.groupby("model")["execution_time"].mean().reset_index()
-            fig_time = px.bar(
-                avg_time,
-                x="model",
-                y="execution_time",
-                title="Average Execution Time per Model"
-            )
-            st.plotly_chart(fig_time, use_container_width=True)
-        else:
-            st.info("⚠️ No 'execution_time' data available for chart.")
+        # 🔹 Garantir que todos os textos são strings
+        df_eval["ticket_text"] = df_eval["ticket_text"].astype(str)
 
-        # === MÉDIA DE SCORE POR MODELO ===
-        if "score" in df_all.columns and df_all["score"].notna().any():
-            avg_score = df_all.groupby("model")["score"].mean().reset_index()
-            fig_score = px.bar(
-                avg_score,
-                x="model",
-                y="score",
-                title="Average Score per Model"
-            )
-            st.plotly_chart(fig_score, use_container_width=True)
-        else:
-            st.info("⚠️ No 'score' data available for chart.")
+        # 🔹 Garantir que todos os labels são strings
+        df_eval["category"] = df_eval["category"].astype(str)
 
-        # === EVOLUÇÃO TEMPORAL DO TEMPO DE EXECUÇÃO ===
-        if "execution_time" in df_all.columns and "timestamp" in df_all.columns:
-            fig_line = px.line(
-                df_all.dropna(subset=["execution_time"]),
-                x="timestamp",
-                y="execution_time",
-                color="model",
-                title="Execution Time Over Runs"
-            )
-            st.plotly_chart(fig_line, use_container_width=True)
-        else:
-            st.info("⚠️ Missing columns for execution time over time chart.")
+        # 🔹 Remover linhas com label inválido (unknown ou string vazia)
+        df_eval = df_eval[df_eval["category"].str.strip() != ""]
+        df_eval = df_eval[df_eval["category"].str.lower() != "unknown"]
 
+        # 🔹 Agora podemos dividir para treino/teste
+        X_train, X_test, y_train, y_test = train_test_split(
+            df_eval["ticket_text"].tolist(),
+            df_eval["category"].tolist(),
+            test_size=0.2,
+            random_state=42,
+            stratify=df_eval["category"]
+        )
 
-with tab5:
-    st.subheader("Monitoring Logs")
-    log_type = st.selectbox("Select log type for details:", ["all","train", "test"], key="logs_tab2")
-    df_logs = load_logs(log_type)
+        all_texts = df_eval["ticket_text"].tolist()
 
-    if not df_logs.empty:
-        st.dataframe(df_logs)
-    else:
-        st.warning("No detailed logs found.")
+        dataset_cfg = {
+            "X_train": X_train,
+            "y_train": y_train,
+            "X_test": X_test,
+            "y_test": y_test,
+            "texts": all_texts
+        }
+
+        embed_fns = {
+            "BERT": get_bert_embeddings,
+            "GPT-2": get_gpt2_embeddings,
+            "SBERT": get_sbert_embeddings
+        }
+
+        results = run_full_evaluation(embed_fns, dataset_cfg, classifier=LogisticRegression(max_iter=1000), n_clusters=8)
+
+        save_embedding_evaluation_results(results, log_source="embedding_evaluation_tobi")
+
+        st.success("✅ Avaliação concluída e resultados salvos no banco!")
+        st.rerun()

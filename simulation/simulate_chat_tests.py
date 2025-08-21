@@ -1,10 +1,13 @@
 # simulation/simulate_chat_tests.py
-
+# =================================
+## python -m simulation.simulate_chat_tests
 import argparse
 import time
 import pandas as pd
 import uuid
 import csv
+import sys
+import types
 from datetime import datetime, timezone
 import torch
 import logging
@@ -72,18 +75,75 @@ def simulate_test(model_name, questions, execution_type="test"):
     score = round(0.7 + (0.3 * len(questions) / 100), 4)  # Fake score
 
     execution_time = round(time.time() - start_time, 4)
-
-    # Log execution
-    log_execution(model=model_name, execution_time=execution_time, score=score, execution_type=execution_type)
-
     return {"model": model_name, "execution_time": execution_time, "score": score}
 
+class SessionStateMock:
+    def __init__(self):
+        self._store = {}
+    def __getattr__(self, item):
+        try:
+            return self._store[item]
+        except KeyError:
+            raise AttributeError(f"No attribute {item}")
+    def __setattr__(self, key, value):
+        if key == "_store":
+            super().__setattr__(key, value)
+        else:
+            self._store[key] = value
+    def __getitem__(self, key):
+        return self._store.get(key, None)
+    def __setitem__(self, key, value):
+        self._store[key] = value
+    def get(self, key, default=None):
+        return self._store.get(key, default)
+    def __contains__(self, key):
+        return key in self._store
+
+def no_op_decorator(*args, **kwargs):
+    def decorator(func):
+        return func
+    return decorator
+
+class DummyContextManager:
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+fake_st = types.SimpleNamespace(
+    subheader=lambda *a, **k: None,
+    progress=lambda *a, **k: None,
+    session_state=SessionStateMock(),
+    cache_data=no_op_decorator,
+    cache_resource=no_op_decorator,
+    set_page_config=lambda *a, **k: None,
+    form=lambda *a, **k: DummyContextManager(),
+    text_input=lambda *a, **k: "",
+    text_area=lambda *a, **k: "",
+    form_submit_button=lambda *a, **k: False,
+    error=lambda *a, **k: None,
+    warning=lambda *a, **k: None,
+    success=lambda *a, **k: None,
+    radio=lambda *a, **k: None,
+    button=lambda *a, **k: False,
+    chat_input=lambda *a, **k: None,
+    markdown=lambda *a, **k: None,
+    sidebar=types.SimpleNamespace(
+        button=lambda *a, **k: False,
+        markdown=lambda *a, **k: None,
+        expander=lambda *a, **k: fake_st,
+        caption=lambda *a, **k: None
+    )
+)
+sys.modules['streamlit'] = fake_st
 
 # ==== MAIN TEST LOOP ====
 def run_tests(questions_file="data/questions.txt"):
     from pages.Chatbot import generate_gpt2_reply, get_bert_embeddings
 
     TEST_QUERIES = load_test_queries(questions_file)
+    print(f"Arquivo com {len(TEST_QUERIES)} queries carregado.")
+
     logging.info(f"Starting automated chatbot tests with {len(TEST_QUERIES)} queries...")
     user_id = f"test_{uuid.uuid4().hex[:8]}"
 
@@ -115,6 +175,7 @@ def run_tests(questions_file="data/questions.txt"):
 
     total_queries = len(TEST_QUERIES)
     for i, query in enumerate(TEST_QUERIES, start=1):
+        print(f"Processing {i}/{len(TEST_QUERIES)}: {query}")
 
         # --- Barra de progresso no terminal ---
         progress = int((i / total_queries) * 100)
@@ -191,7 +252,7 @@ def run_tests(questions_file="data/questions.txt"):
         logging.info("-" * 50)
 
     # Export to CSV
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     csv_filename = f"simulation/result/test_results-{timestamp}.csv"
     Path("simulation/result").mkdir(parents=True, exist_ok=True)
     with open(csv_filename, mode="w", newline="", encoding="utf-8") as file:
@@ -212,11 +273,19 @@ def run_tests(questions_file="data/questions.txt"):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--file", default="data/questions.txt", help="Path to questions file")
+    parser.add_argument(
+        "--file", 
+        default="data/questions.txt", 
+        help="Path to questions file"
+    )
     args = parser.parse_args()
     run_tests(args.file)
 
-    test_questions = ["How do I reset my password?", "Where is my invoice?", "Can I change my subscription?"]
+    test_questions = [
+        "How do I reset my password?", 
+        "Where is my invoice?", 
+        "Can I change my subscription?"
+    ]
 
     results = []
     results.append(simulate_test("BERT", test_questions, "test"))

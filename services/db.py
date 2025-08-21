@@ -10,6 +10,8 @@ unanswered_col = db["unanswered"]
 requests_col = db["requests"]
 default_chat_col = db["default_chat"]
 users_col = db["users"]
+monitoring_col = db["monitoring"]
+test_results_col = db["test_results"]
 
 # =========================================================
 # Funções de Chat
@@ -83,3 +85,26 @@ def save_unanswered(session_id, question):
         "question": question,
         "timestamp": datetime.now(timezone.utc)
     })
+
+def save_embedding_evaluation_results(results: dict, log_source="embedding_evaluation", extra_meta=None):
+    """
+    Salva os resultados da avaliação de embeddings no MongoDB 'test_results'.
+    """
+    timestamp_now = datetime.now(timezone.utc)
+
+    for model_name, metrics in results.items():
+        doc = {
+            "timestamp": timestamp_now,
+            "model": model_name.lower(),
+            "log_source": log_source,
+            "accuracy": metrics["classification"]["accuracy"],
+            "precision": metrics["classification"]["precision"],
+            "recall": metrics["classification"]["recall"],
+            "f1_score": metrics["classification"]["f1_score"],
+            "embedding_train_time": metrics["classification"]["embedding_train_time_sec"],
+            "embedding_test_time": metrics["classification"]["embedding_test_time_sec"],
+            "silhouette_score": metrics["clustering"]["silhouette_score"]
+        }
+        if extra_meta:
+            doc.update(extra_meta)
+        test_results_col.insert_one(doc)

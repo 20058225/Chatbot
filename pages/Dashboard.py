@@ -1,4 +1,6 @@
 # pages/Dashboard.py
+#===================
+
 import streamlit as st
 import pandas as pd
 from bson import ObjectId
@@ -7,8 +9,6 @@ from datetime import datetime, timezone
 import altair as alt
 
 from services.mongo import db
-from services.ml import train_and_save_models_from_csv, train_and_save_kmeans_from_csv
-from services.db import update_message_feedback 
 
 st.set_page_config(page_title="📊 Chatbot Dashboard", page_icon="👩‍💻", layout="wide")
 
@@ -28,7 +28,8 @@ faq = db["faq"]
 default_chat = db["default_chat"]
 knowledge = db["knowledge"]
 
-
+def get_recent(collection, filter={}, sort_field="start_time", limit=50):
+    return list(collection.find(filter).sort(sort_field, -1).limit(limit))
 
 tab1, tab2, tab3, tab4 = st.tabs([
     "📚 FAQs",
@@ -61,7 +62,7 @@ with tab1:
                 del st.session_state['adding_new_faq']
                 st.rerun()
 
-    faqs = list(faq.find())
+    faqs = get_recent(faq, {}, "import_timestamp", 50)
     for doc in faqs:
         st.markdown(f"**Q:** {doc.get('question', '')}")
         st.write(f"**A:** {doc.get('answer', '')}")
@@ -123,7 +124,7 @@ with tab2:
                 knowledge.insert_one({
                     "title": new_t,
                     "content": new_c,
-                    "import_timestamp": datetime.now()
+                    "import_timestamp": datetime.now(timezone.utc)
                 })
                 st.success("New article added!")
                 del st.session_state['adding_new_article']
@@ -132,7 +133,7 @@ with tab2:
                 del st.session_state['adding_new_article']
                 st.rerun()
 
-    articles = list(knowledge.find())
+    articles = get_recent(knowledge, {}, "import_timestamp", 50)
     for article in articles:
         st.markdown(f"### 📘 {article.get('title', 'No Title')}")
         st.write(article.get("content", "No content"))
@@ -192,7 +193,7 @@ with tab3:
             ]
         }
 
-    chat_sessions = list(chats.find(query).sort("start_time", -1).limit(50))
+    chat_sessions = get_recent(chats, query, "start_time", 50)
 
     if chat_sessions:
         for chat in chat_sessions:
@@ -228,8 +229,6 @@ with tab3:
                     ts_str = timestamp.strftime('%Y-%m-%d %H:%M:%S') if isinstance(timestamp, datetime) else str(timestamp)
 
                     st.write(f"**{sender}:** {text}  _(at {ts_str})_")
-                    # st.write(f"**{sender}:** {text}  _(at {ts_str})_  — Feedback: {feedback}")
-
     else:
         st.info("No chat sessions found.")
 

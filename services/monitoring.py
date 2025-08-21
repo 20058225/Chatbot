@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import datetime, timezone
 from services.mongo import db
 
-timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
 # Log directory and file
 LOG_DIR = "logs"
@@ -16,7 +16,6 @@ LOG_FILE = os.path.join(LOG_DIR, "chatbot_monitor.log")
 test_results_col = db["test_results"]
 monitoring_col = db["monitoring"]
 chats = db["chats"]
-monitor_col = db["monitoring"]
 
 # Logging configuration
 logging.basicConfig(
@@ -69,9 +68,9 @@ def log_user_interaction(user_id, question, answer, intent_tag, sentiment, prior
         "is_fallback": is_fallback,
         "response_time": response_time,
         "model_version": MODEL_VERSION,
-        "timestamp": datetime.now()
+        "timestamp": datetime.now(timezone.utc)
     }
-    monitor_col.insert_one(doc)
+    monitoring_col.insert_one(doc)
 
     logging.info(
         f"user_id={user_id} | intent={intent_tag} | priority={priority} | sentiment={sentiment} | "
@@ -86,15 +85,14 @@ def log_error(user_id, error):
         "user_id": user_id,
         "error_type": err_type,
         "error_msg": str(error),
-        "timestamp": datetime.now()
+        "timestamp": datetime.now(timezone.utc)
     }
-    monitor_col.insert_one(doc)
+    monitoring_col.insert_one(doc)
     logging.error(f"user_id={user_id} | Exception type={err_type}: {error}")
 
 
 def generate_report():
-    """Gera um resumo agregado das interações."""
-    total_responses = monitor_col.count_documents({"intent_tag": {"$exists": True}})
+    total_responses = monitoring_col.count_documents({"intent_tag": {"$exists": True}})
     if total_responses == 0:
         return "No interactions logged yet."
 
@@ -111,14 +109,18 @@ def generate_report():
             }
         }
     ]
-    result = list(monitor_col.aggregate(pipeline))[0]
+    result_list = list(monitoring_col.aggregate(pipeline))
+    if not result_list:
+        return "No interactions logged yet."
+
+    result = result_list[0]
 
     fallback_rate = result["fallback_count"] / total_responses
     total_feedback = result["thumbs_up_count"] + result["thumbs_down_count"]
     satisfaction_score = ((result["thumbs_up_count"] - result["thumbs_down_count"]) / total_feedback) if total_feedback > 0 else 0
     unique_users = len(result["unique_users"])
 
-    error_count = monitor_col.count_documents({"error_type": {"$exists": True}})
+    error_count = monitoring_col.count_documents({"error_type": {"$exists": True}})
 
     report = f"""
 Chatbot Monitoring Report:

@@ -7,3 +7,6 @@ config/.env
 /data
 /ml/models
 /simulation/result
+emb.sh
+extract_short.py
+extract_structure.py

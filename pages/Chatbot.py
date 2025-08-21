@@ -245,13 +245,13 @@ def find_default_answer(user_input):
     user_input = user_input.strip().lower()
     doc = default_chat.find_one({"intents": {"$exists": True}}) or {}
     intents = doc.get("intents", [])
-    if not "intents":
+    if not intents:
         return None, None
 
     for intent in intents:
         for pattern in intent.get("patterns", []):
             if is_similar(pattern, user_input):
-                selected_response = random.choice(intent.get("responses", [])) if intent.get("reponse") else None
+                selected_response = random.choice(intent.get("responses", [])) if intent.get("responses") else None
                 return selected_response, intent.get("tag", "intent")
     return None, None
 
@@ -594,10 +594,30 @@ def chat_interface():
             except Exception:
                 elapsed = 0
             st.markdown("🤖 **Bot**: ⏳ thinking..." if elapsed < 5 else "🤖 **Bot**: 🔍 still looking...")
-
+    """
+    # Evita processar mensagens iguais enviadas rapidamente
+    if "last_message" not in st.session_state:
+        st.session_state["last_message"] = None
+    if "last_message_time" not in st.session_state:
+        st.session_state["last_message_time"] = 0
+"""
     # --- Input do usuário ---
     user_input = st.chat_input("Hello! How can I help you today?", key="user_input")
 
+    """
+    if user_input:
+        now = datetime.now(timezone.utc)
+        # só aceita se for diferente ou enviado depois de 2 segundos
+        if (
+            user_input != st.session_state["last_message"]
+            or (now - st.session_state["last_message_time"]) > 2
+        ):
+            st.session_state["last_message"] = user_input
+            st.session_state["last_message_time"] = now
+            process_message(user_input)  # <-- sua função
+        else:
+            st.warning("Mensagem duplicada ignorada.")
+"""
     if user_input and user_input != st.session_state.last_user_input:
         st.session_state.last_user_input = user_input
 
